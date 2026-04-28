@@ -6,7 +6,10 @@ Design choice (see final report, sub-question 1):
 - User and customer names stay VISIBLE (explicit servicedesk request:
   needed for context and prioritization).
 - Only highly sensitive data is removed/masked before data
-  enters the LLM context: passwords, secrets, API keys and tokens.
+  enters the LLM context:
+    * passwords / secrets / API keys / tokens
+    * BSN numbers (NL national ID, GDPR especially sensitive)
+    * IBAN account numbers
 
 Every replacement is counted so the evaluation (PII leak = 0%) is auditable.
 """
@@ -37,22 +40,41 @@ RE_SECRET_KV = re.compile(
 # Long hex/base64-like strings (>= 32 chars) — almost always keys/hashes
 RE_LONG_KEY = re.compile(r"\b[A-Fa-f0-9]{32,}\b|\b[A-Za-z0-9+/]{40,}={0,2}\b")
 
+# IBAN (NL + generic European format)
+RE_IBAN = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")
+
+# Candidate BSN: 9 consecutive digits (validated via the 11-test)
+RE_BSN_CANDIDATE = re.compile(r"\b\d{9}\b")
+
+
+def _is_valid_bsn(digits: str) -> bool:
+    """Dutch 11-test for BSN (prevents false positives on random numbers)."""
+    if len(digits) != 9 or not digits.isdigit():
+        return False
+    weights = [9, 8, 7, 6, 5, 4, 3, 2, 1]
+    total = sum(int(d) * w for d, w in zip(digits, weights))
+    return total % 11 == 0
+
 
 @dataclass
 class FilterReport:
     """Audit report of a single filter run."""
     passwords: int = 0
     secrets: int = 0
+    bsn: int = 0
+    iban: int = 0
     replacements: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
-        return self.passwords + self.secrets
+        return self.passwords + self.secrets + self.bsn + self.iban
 
     def as_dict(self) -> dict:
         return {
             "passwords": self.passwords,
             "secrets": self.secrets,
+            "bsn": self.bsn,
+            "iban": self.iban,
             "total": self.total,
         }
 
@@ -74,6 +96,15 @@ class PIIFilter:
         text = _sub(RE_BEARER, "[GEFILTERD:TOKEN]", "secrets", text)
         text = _sub(RE_SECRET_KV, "[GEFILTERD:SECRET]", "secrets", text)
         text = _sub(RE_LONG_KEY, "[GEFILTERD:KEY]", "secrets", text)
+        text = _sub(RE_IBAN, "[GEFILTERD:IBAN]", "iban", text)
+
+        # BSN with the 11-test
+        def _bsn_repl(m: re.Match) -> str:
+            if _is_valid_bsn(m.group(0)):
+                report.bsn += 1
+                return "[GEFILTERD:BSN]"
+            return m.group(0)
+        text = RE_BSN_CANDIDATE.sub(_bsn_repl, text)
 
         return text, report
 
@@ -87,5 +118,7 @@ class PIIFilter:
             out.append(cleaned)
             merged.passwords += rep.passwords
             merged.secrets += rep.secrets
+            merged.bsn += rep.bsn
+            merged.iban += rep.iban
             merged.replacements.extend(rep.replacements)
         return out, merged
