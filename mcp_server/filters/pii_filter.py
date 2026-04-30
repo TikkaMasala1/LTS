@@ -150,3 +150,24 @@ class PIIFilter:
             merged.public_ips += rep.public_ips
             merged.replacements.extend(rep.replacements)
         return out, merged
+
+
+# Patterns that must never appear after filtering.
+# Used by evaluation/quantitative.py for the "PII leak = 0%" measurement.
+LEAK_DETECTORS: list[re.Pattern] = [
+    RE_PASSWORD,
+    RE_BEARER,
+    RE_SECRET_KV,
+    RE_IBAN,
+]
+
+
+def detect_leaks(text: str) -> list[str]:
+    """Scans text (e.g. the full LLM input) for remaining sensitive data."""
+    hits: list[str] = []
+    for pattern in LEAK_DETECTORS:
+        hits.extend(m.group(0) for m in pattern.finditer(text))
+    for m in RE_BSN_CANDIDATE.finditer(text):
+        if _is_valid_bsn(m.group(0)):
+            hits.append(m.group(0))
+    return hits
