@@ -8,17 +8,32 @@ import datetime
 import psutil
 import subprocess
 import threading
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize the new Google GenAI client
 client = genai.Client()
 
 
-# === MCP-style tools (later te vervangen door echte FastMCP server) ===
+# Thread-safe helpers
+def ask_yes_no_threadsafe(title, message):
+    """Safely prompts a messagebox from a background thread."""
+    result = [None]
+    event = threading.Event()
+
+    def _ask():
+        result[0] = messagebox.askyesno(title, message)
+        event.set()
+
+    root.after(0, _ask)
+    event.wait()
+    return result[0]
+
+
+# MCP tools (later te vervangen door echte FastMCP server)
 def collect_realtime_logs() -> str:
-    """Resource: Collect realtime system logs (simulated + psutil info for now)"""
+    """Collect realtime system logs (simulated + psutil info for now)."""
     try:
         disk_usage = psutil.disk_usage('/')
         mem = psutil.virtual_memory()
@@ -35,26 +50,24 @@ Recent events (simulation):
 
 
 def run_disk_cleaner() -> str:
-    """Tool: Run Windows Disk Cleaner (HitL: only after user confirmation)"""
+    """Run Windows Disk Cleaner."""
     try:
         result = subprocess.run(['cleanmgr', '/sagerun:1'],
                                 capture_output=True, text=True, timeout=30, shell=True)
         return f"Disk Cleaner executed.\nOutput: {result.stdout or 'Success (no output)'}"
     except Exception as e:
-        return f"Disk Cleaner could not start (admin rights may be required): {str(e)}"
+        return f"Disk Cleaner could not start: {str(e)}"
 
 
-# Chat history
 chat_history = []
 
 
 def process_ai_response(user_input):
     """Background thread: calls Gemini and updates GUI safely"""
     try:
-        # Add user message to history
         chat_history.append({"role": "user", "parts": [{"text": user_input}]})
 
-        # First generation with tools
+        # First generation
         response = client.models.generate_content(
             model='gemini-3.1-flash-lite-preview',
             contents=chat_history,
@@ -63,7 +76,6 @@ def process_ai_response(user_input):
             )
         )
 
-        # ROBUST function call detection
         func_name = None
         tool_result = None
 
@@ -77,22 +89,24 @@ def process_ai_response(user_input):
             if func_call is not None and hasattr(func_call, 'name'):
                 func_name = func_call.name
 
-                # Safe GUI update from thread
-                root.after(0, lambda: chat_window.insert(tk.END, f"Agent calling tool: {func_name}...\n"))
-                root.after(0, chat_window.see, tk.END)
+                def show_tool_call():
+                    chat_window.insert(tk.END, f"Agent calling tool: {func_name}...\n")
+                    chat_window.see(tk.END)
+                    chat_window.update_idletasks()
+                    chat_window.update()
+
+                root.after(0, show_tool_call)
 
                 if func_name == "collect_realtime_logs":
                     tool_result = collect_realtime_logs()
                 elif func_name == "run_disk_cleaner":
-                    if messagebox.askyesno("Human-in-the-Loop Confirmation",
-                                           "Do you want to run Disk Cleaner now? (This is a real system action)"):
+                    if ask_yes_no_threadsafe("Confirmation", "Do you want to run Disk Cleaner now?"):
                         tool_result = run_disk_cleaner()
                     else:
-                        tool_result = "Action cancelled by user (HitL)."
+                        tool_result = "Action cancelled by user."
                 else:
                     tool_result = "Unknown tool."
 
-                # Add function call + result back to history
                 chat_history.append({
                     "role": "model",
                     "parts": [{"function_call": func_call}]
@@ -114,27 +128,29 @@ def process_ai_response(user_input):
                     config=types.GenerateContentConfig()
                 )
 
-        # Get final AI text
         ai_text = ""
         if hasattr(response, 'text') and response.text:
             ai_text = response.text
         elif response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
             ai_text = str(response.candidates[0].content.parts[0])
 
-        # Safe GUI updates
         def update_gui():
             chat_window.insert(tk.END, f"Agent: {ai_text}\n\n")
             chat_window.see(tk.END)
+            chat_window.update_idletasks()
+            chat_window.update()
             chat_history.append({"role": "model", "parts": [{"text": ai_text}]})
 
-            # Human-in-the-Loop check
+            # Check resolution status
             if any(word in ai_text.lower() for word in ["solved", "fixed", "resolved", "done", "klaar"]):
                 if messagebox.askyesno("Issue Status", "Is the issue solved?"):
                     chat_window.insert(tk.END, "Issue marked as resolved.\n")
+                    chat_window.see(tk.END)
+                    chat_window.update_idletasks()
+                    chat_window.update()
                 else:
                     export_ticket_json()
 
-            # Re-enable input
             user_entry.config(state=tk.NORMAL)
             send_btn.config(state=tk.NORMAL)
 
@@ -146,6 +162,8 @@ def process_ai_response(user_input):
         def show_error():
             chat_window.insert(tk.END, f"{error_msg}\n")
             chat_window.see(tk.END)
+            chat_window.update_idletasks()
+            chat_window.update()
             user_entry.config(state=tk.NORMAL)
             send_btn.config(state=tk.NORMAL)
 
@@ -158,21 +176,21 @@ def send_message():
     if not user_input:
         return
 
-    # Add user message immediately (on main thread)
     chat_window.config(state=tk.NORMAL)
     chat_window.insert(tk.END, f"You: {user_input}\n\n")
     chat_window.see(tk.END)
+    chat_window.update_idletasks()
+    chat_window.update()
     user_entry.delete("1.0", tk.END)
 
-    # Disable input while processing
     user_entry.config(state=tk.DISABLED)
     send_btn.config(state=tk.DISABLED)
 
-    # Show thinking indicator
     chat_window.insert(tk.END, "Thinking...\n\n")
     chat_window.see(tk.END)
+    chat_window.update_idletasks()
+    chat_window.update()
 
-    # Start AI processing in background thread
     thread = threading.Thread(target=process_ai_response, args=(user_input,), daemon=True)
     thread.start()
 
@@ -185,18 +203,21 @@ def export_ticket_json():
         "priority": "Medium",
         "logs": collect_realtime_logs(),
         "timestamp": datetime.datetime.now().isoformat(),
-        "source": "Local MCP Troubleshooter Agent v0.4 (threaded + gemini-3.1-flash-lite-preview)"
+        "source": "Local MCP Troubleshooter Agent v0.5"
     }
     filename = f"autotask_ticket_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(ticket, f, indent=2, ensure_ascii=False)
     messagebox.showinfo("JSON Exported", f"Ticket saved as:\n{filename}\n\nReady for Autotask API integration!")
     chat_window.insert(tk.END, f"JSON exported -> {filename}\n")
+    chat_window.see(tk.END)
+    chat_window.update_idletasks()
+    chat_window.update()
 
 
-# === GUI ===
+# GUI initialization
 root = tk.Tk()
-root.title("Local Troubleshooter Agent (MCP PoC - google-genai)")
+root.title("Local Troubleshooter Agent (MCP PoC)")
 root.geometry("900x700")
 
 chat_window = scrolledtext.ScrolledText(root, wrap=tk.WORD, state=tk.NORMAL, font=("Consolas", 10))
@@ -211,17 +232,15 @@ send_btn.pack(pady=5)
 
 user_entry.focus_set()
 
-# Welcome message
 chat_window.insert(tk.END, "Welcome to the Local Troubleshooter Agent!\n"
-                           "I am your MCP-powered AI assistant (google-genai SDK + gemini-3.1-flash-lite-preview).\n"
                            "Tell me what's wrong (e.g. 'my C: drive is full').\n\n")
 chat_window.config(state=tk.DISABLED)
 
 
-# Background thread placeholder for future realtime log monitoring
+# Placeholder for future realtime log monitoring
 def realtime_monitor():
     while True:
-        pass
+        time.sleep(1)
 
 
 threading.Thread(target=realtime_monitor, daemon=True).start()
