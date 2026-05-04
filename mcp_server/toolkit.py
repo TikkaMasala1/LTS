@@ -121,8 +121,41 @@ def get_uptime() -> str:
     return _j({"uptime_days": days, "reboot_recommended": days >= 30})
 
 
+# ---------------------------------------------------------------------------
+# Tools — storage (scenario 1)
+# ---------------------------------------------------------------------------
+
+def get_disk_usage(drive: str = "C:") -> str:
+    """Disk usage per volume: total/used/free in GB and percentage."""
+    if CTX.mode == "live":
+        usage = shutil.disk_usage("/")
+        gb = 1024 ** 3
+        return _j({"drive": "/", "total_gb": round(usage.total / gb, 1),
+                   "used_gb": round(usage.used / gb, 1),
+                   "free_gb": round(usage.free / gb, 1),
+                   "used_pct": round(100 * usage.used / usage.total, 1)})
+    info = CTX.state["disk"].get(drive) or next(iter(CTX.state["disk"].values()))
+    return _j({"drive": drive, **info,
+               "status": "CRITICAL" if info["used_pct"] >= 90 else
+                         "WARNING" if info["used_pct"] >= 80 else "OK"})
+
+
+def list_large_files(top_n: int = 5) -> str:
+    """The largest files/folders on the system (candidates for cleanup)."""
+    files = CTX.state.get("large_files", [])[:top_n]
+    return _j({"large_files": files})
+
+
+def get_temp_files_size() -> str:
+    """Total size of temporary files (Windows Temp, browser caches)."""
+    size = CTX.state.get("temp_size_gb", 0)
+    return _j({"temp_size_gb": size,
+               "cleanup_potential": "high" if size >= 5 else "low"})
+
+
 TOOL_REGISTRY = {
     f.__name__: f for f in [
         get_recent_logs, search_logs, get_system_info, get_uptime,
+        get_disk_usage, list_large_files, get_temp_files_size,
     ]
 }
