@@ -190,11 +190,40 @@ def get_pending_updates() -> str:
     return _j({"pending_updates": CTX.state.get("pending_updates", 0)})
 
 
+# ---------------------------------------------------------------------------
+# Tools — network & VPN (scenario 3)
+# ---------------------------------------------------------------------------
+
+def get_vpn_status() -> str:
+    """VPN tunnel status: gateway, latency, packet loss, throughput, client version."""
+    vpn = dict(CTX.state.get("vpn", {}))
+    lat, loss = vpn.get("latency_ms", 0), vpn.get("packet_loss_pct", 0)
+    vpn["health"] = ("CRITICAL" if lat >= 300 or loss >= 5 else
+                     "WARNING" if lat >= 120 or loss >= 1 else "OK")
+    vpn["client_outdated"] = str(vpn.get("client_version", "")).startswith(("4.", "5.0"))
+    return _j(vpn)
+
+
+def measure_network_latency(host: str = "gateway") -> str:
+    """Measure the network latency (ping) to a host or the default gateway."""
+    net = CTX.state.get("network", {})
+    return _j({"host": host, "latency_ms": net.get("ping_gateway_ms", 0),
+               "dns_ok": net.get("dns_ok", True)})
+
+
+def run_speedtest() -> str:
+    """Indicative throughput over the active (VPN) connection."""
+    vpn = CTX.state.get("vpn", {})
+    return _j({"throughput_mbps": vpn.get("throughput_mbps"),
+               "via_vpn": vpn.get("connected", False)})
+
+
 TOOL_REGISTRY = {
     f.__name__: f for f in [
         get_recent_logs, search_logs, get_system_info, get_uptime,
         get_disk_usage, list_large_files, get_temp_files_size,
         get_performance_metrics, get_top_processes, check_service_status,
-        get_pending_updates,
+        get_pending_updates, get_vpn_status, measure_network_latency,
+        run_speedtest,
     ]
 }
