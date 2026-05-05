@@ -153,9 +153,48 @@ def get_temp_files_size() -> str:
                "cleanup_potential": "high" if size >= 5 else "low"})
 
 
+# ---------------------------------------------------------------------------
+# Tools — performance (scenario 2)
+# ---------------------------------------------------------------------------
+
+def get_performance_metrics() -> str:
+    """Current CPU and RAM load of the endpoint."""
+    if CTX.mode == "live":
+        try:
+            import psutil
+            return _j({"cpu_pct": psutil.cpu_percent(interval=0.3),
+                       "ram_pct": psutil.virtual_memory().percent})
+        except ImportError:
+            return _j({"error": "psutil niet beschikbaar"})
+    p = CTX.state["performance"]
+    return _j({"cpu_pct": p["cpu_pct"], "ram_pct": p["ram_pct"],
+               "status": "CRITICAL" if max(p["cpu_pct"], p["ram_pct"]) >= 90 else
+                         "WARNING" if max(p["cpu_pct"], p["ram_pct"]) >= 75 else "OK"})
+
+
+def get_top_processes(top_n: int = 5) -> str:
+    """Processes with the highest CPU/RAM usage."""
+    procs = CTX.state["performance"].get("top_processes", [])[:top_n]
+    return _j({"top_processes": procs})
+
+
+def check_service_status(service_name: str) -> str:
+    """Status of a Windows service (e.g. Spooler, RasMan, Dnscache)."""
+    services = CTX.state.get("services", {})
+    status = services.get(service_name, "unknown")
+    return _j({"service": service_name, "status": status})
+
+
+def get_pending_updates() -> str:
+    """Number of pending Windows updates."""
+    return _j({"pending_updates": CTX.state.get("pending_updates", 0)})
+
+
 TOOL_REGISTRY = {
     f.__name__: f for f in [
         get_recent_logs, search_logs, get_system_info, get_uptime,
         get_disk_usage, list_large_files, get_temp_files_size,
+        get_performance_metrics, get_top_processes, check_service_status,
+        get_pending_updates,
     ]
 }
