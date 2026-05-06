@@ -218,12 +218,29 @@ def run_speedtest() -> str:
                "via_vpn": vpn.get("connected", False)})
 
 
+# ---------------------------------------------------------------------------
+# Tools — proposed actions (HitL: propose only, never execute)
+# ---------------------------------------------------------------------------
+
+def propose_remediation(action: str, target: str, reason: str) -> str:
+    """Propose a remediation action. The action is NOT executed; it is placed in the
+    queue for explicit human approval (Human-in-the-Loop).
+
+    action: e.g. cleanup_disk | restart_process | restart_service |
+            update_vpn_client | flush_dns | reconnect_vpn | no_action
+    """
+    proposal = {"action": action, "target": _filtered(target),
+                "reason": _filtered(reason), "status": "PENDING_HUMAN_APPROVAL",
+                "executed": False}
+    return _j(proposal)
+
+
 TOOL_REGISTRY = {
     f.__name__: f for f in [
         get_recent_logs, search_logs, get_system_info, get_uptime,
         get_disk_usage, list_large_files, get_temp_files_size,
         get_performance_metrics, get_top_processes, check_service_status,
         get_pending_updates, get_vpn_status, measure_network_latency,
-        run_speedtest,
+        run_speedtest, propose_remediation,
     ]
 }
