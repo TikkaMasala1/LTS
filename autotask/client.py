@@ -1,20 +1,24 @@
 """
 Autotask PSA REST API integration (sandbox).
 
-Mock mode: without sandbox credentials the client simulates the API locally
-(tickets in data/mock_autotask.json), so development and evaluation can
-continue when the sandbox is offline (risk mitigation PvA ch. 4).
+- Mock mode: without sandbox credentials the client simulates the API locally
+  (tickets in data/mock_autotask.json), so development and evaluation can
+  continue when the sandbox is offline (risk mitigation PvA ch. 4).
+
+Write actions ALWAYS go through a draft + explicit HitL approval.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("LTS_DATA_DIR", "data"))
 MOCK_DB = DATA_DIR / "mock_autotask.json"
+DRAFTS_DB = DATA_DIR / "pending_drafts.json"
 
 
 def _load(path: Path, default):
@@ -33,7 +37,46 @@ class AutotaskError(RuntimeError):
 
 
 class BaseAutotaskClient:
-    """Shared interface for both the real and mock client."""
+    """Shared draft flow (HitL) for both the real and mock client."""
+
+    # ---- Draft queue (Human-in-the-Loop) ----------------------------
+
+    def draft_ticket(self, title: str, description: str,
+                     priority: str = "Medium", queue: str = "Managed Services") -> dict:
+        drafts = _load(DRAFTS_DB, [])
+        draft = {
+            "draft_id": f"D-{uuid.uuid4().hex[:8]}",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "title": title, "description": description,
+            "priority": priority, "queue": queue,
+            "status": "PENDING_HUMAN_APPROVAL",
+        }
+        drafts.append(draft)
+        _save(DRAFTS_DB, drafts)
+        return draft
+
+    def list_drafts(self, status: str = "PENDING_HUMAN_APPROVAL") -> list[dict]:
+        return [d for d in _load(DRAFTS_DB, []) if status in ("ALL", d["status"])]
+
+    def resolve_draft(self, draft_id: str, approved: bool, approver: str,
+                      feedback: str = "") -> dict:
+        """Approve => ticket is actually created; reject => only logged."""
+        drafts = _load(DRAFTS_DB, [])
+        for d in drafts:
+            if d["draft_id"] == draft_id:
+                d["resolved_at"] = datetime.now().isoformat(timespec="seconds")
+                d["approver"] = approver
+                d["feedback"] = feedback
+                if approved:
+                    ticket = self.create_ticket(d["title"], d["description"],
+                                                d["priority"], d["queue"])
+                    d["status"] = "APPROVED"
+                    d["ticket"] = ticket
+                else:
+                    d["status"] = "REJECTED"
+                _save(DRAFTS_DB, drafts)
+                return d
+        raise AutotaskError(f"Draft {draft_id} niet gevonden")
 
     # ---- JSON wrappers for MCP tools -----------------------------------
 
@@ -43,6 +86,9 @@ class BaseAutotaskClient:
 
     def get_ticket_json(self, ticket_id: str) -> str:
         return json.dumps(self.get_ticket(ticket_id), ensure_ascii=False, indent=2)
+
+    def draft_ticket_json(self, **kwargs) -> str:
+        return json.dumps(self.draft_ticket(**kwargs), ensure_ascii=False, indent=2)
 
     # ---- To be implemented by subclasses --------------------------------
 
