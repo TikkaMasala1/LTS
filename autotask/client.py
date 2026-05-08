@@ -1,9 +1,15 @@
 """
 Autotask PSA REST API integration (sandbox).
 
-- Mock mode: without sandbox credentials the client simulates the API locally
-  (tickets in data/mock_autotask.json), so development and evaluation can
-  continue when the sandbox is offline (risk mitigation PvA ch. 4).
+Security measures (see PvA §3.2.2 and final report DV2):
+  - Authentication via API tracking identifier with *least privilege* rights
+    (only Tickets: read/create in the sandbox tenant).
+  - Secrets only via environment variables (.env), never hardcoded.
+  - Exponential backoff on rate limits (HTTP 429) and server errors (5xx),
+    following the risk mitigation from chapter 4 of the PvA.
+  - Mock mode: if there are no sandbox credentials, the client simulates the
+    API locally (tickets in data/mock_autotask.json), so development and
+    evaluation can continue when the sandbox is offline (risk mitigation).
 
 Write actions ALWAYS go through a draft + explicit HitL approval.
 """
@@ -12,13 +18,21 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import httpx
+except ImportError:  # mock mode also works without httpx
+    httpx = None  # type: ignore
+
 DATA_DIR = Path(os.environ.get("LTS_DATA_DIR", "data"))
 MOCK_DB = DATA_DIR / "mock_autotask.json"
 DRAFTS_DB = DATA_DIR / "pending_drafts.json"
+
+PRIORITY_MAP = {"Critical": 4, "High": 1, "Medium": 2, "Low": 3}
 
 
 def _load(path: Path, default):
@@ -146,6 +160,78 @@ class MockAutotaskClient(BaseAutotaskClient):
         return ticket
 
 
+class SandboxAutotaskClient(BaseAutotaskClient):
+    """Real Autotask REST API client (sandbox tenant)."""
+
+    mode = "sandbox"
+    MAX_RETRIES = 5
+
+    def __init__(self, base_url: str, integration_code: str,
+                 username: str, secret: str) -> None:
+        if httpx is None:
+            raise AutotaskError("httpx is vereist voor sandbox-modus (pip install httpx)")
+        self.base_url = base_url.rstrip("/")
+        self.headers = {
+            "ApiIntegrationCode": integration_code,
+            "UserName": username,
+            "Secret": secret,
+            "Content-Type": "application/json",
+        }
+
+    # -- HTTP with exponential backoff (risk mitigation for API rate limits) ----
+
+    def _request(self, method: str, path: str, **kwargs) -> dict:
+        url = f"{self.base_url}{path}"
+        delay = 1.0
+        last_exc: Exception | None = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                resp = httpx.request(method, url, headers=self.headers,
+                                     timeout=20.0, **kwargs)
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    raise AutotaskError(f"HTTP {resp.status_code}")
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:  # noqa: BLE001 — intentionally broad: retry path
+                last_exc = exc
+                time.sleep(delay)
+                delay = min(delay * 2, 30)  # 1, 2, 4, 8, 16 s
+        raise AutotaskError(f"Autotask onbereikbaar na {self.MAX_RETRIES} pogingen: {last_exc}")
+
+    # -- API operations ------------------------------------------------------
+
+    def search_tickets(self, status: str = "open", max_results: int = 10) -> list[dict]:
+        query = {"MaxRecords": max_results,
+                 "filter": [{"op": "noteq", "field": "Status", "value": 5}]
+                 if status == "open" else []}
+        data = self._request("POST", "/v1.0/Tickets/query", json=query)
+        return data.get("items", [])
+
+    def get_ticket(self, ticket_id: str) -> dict:
+        data = self._request("GET", f"/v1.0/Tickets/{ticket_id}")
+        return data.get("item", data)
+
+    def create_ticket(self, title: str, description: str,
+                      priority: str = "Medium", queue: str = "Managed Services") -> dict:
+        body = {
+            "title": title[:255],
+            "description": description[:8000],
+            "priority": PRIORITY_MAP.get(priority, 2),
+            "status": 1,  # New
+            "companyID": int(os.environ.get("AUTOTASK_COMPANY_ID", "0")),
+            "queueID": int(os.environ.get("AUTOTASK_QUEUE_ID", "0")),
+        }
+        data = self._request("POST", "/v1.0/Tickets", json=body)
+        return {"id": data.get("itemId"), "ticketNumber": str(data.get("itemId")),
+                "title": title, "status": "open"}
+
+
 def get_autotask_client() -> BaseAutotaskClient:
-    """Factory: for now always the mock client (sandbox client to follow)."""
+    """Factory: sandbox client if credentials are present, otherwise mock."""
+    base = os.environ.get("AUTOTASK_BASE_URL")
+    code = os.environ.get("AUTOTASK_INTEGRATION_CODE")
+    user = os.environ.get("AUTOTASK_API_USER")
+    secret = os.environ.get("AUTOTASK_API_SECRET")
+    if all([base, code, user, secret]):
+        return SandboxAutotaskClient(base, code, user, secret)
     return MockAutotaskClient()
