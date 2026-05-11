@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from agent.prompts import SYSTEM_PROMPT
 from autotask.client import get_autotask_client
 from mcp_server import toolkit
 
@@ -64,6 +65,28 @@ def autotask_draft_ticket(title: str, description: str, priority: str = "Medium"
     approved it in the HitL interface (functional requirement 3)."""
     return _at.draft_ticket_json(title=title, description=description,
                                  priority=priority, queue=queue)
+
+
+# ---------------------------------------------------------------------------
+# Resources & prompts
+# ---------------------------------------------------------------------------
+
+@mcp.resource("logs://recent")
+def recent_logs_resource() -> str:
+    """Read-only resource: the most recent, PII-filtered incident logs."""
+    return toolkit.get_recent_logs(max_lines=60)
+
+
+@mcp.resource("system://info")
+def system_info_resource() -> str:
+    """Read-only resource: basic information about the endpoint."""
+    return toolkit.get_system_info()
+
+
+@mcp.prompt()
+def servicedesk_agent_prompt() -> str:
+    """Default role instruction: 'senior servicedesk employee'."""
+    return SYSTEM_PROMPT
 
 
 if __name__ == "__main__":
