@@ -25,6 +25,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agent.llm_client import get_llm
 from agent.prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from mcp_server.filters.pii_filter import PIIFilter
+
+_PII = PIIFilter()
 
 MAX_ITERATIONS = 8
 
@@ -72,6 +75,9 @@ class TroubleshooterAgent:
     def diagnose(self, hostname: str, customer: str, user: str,
                  trigger: str = "Geautomatiseerde monitoring-melding") -> DiagnosisResult:
         start = time.perf_counter()
+        # Defense in depth: the trigger (often a raw log line from monitoring)
+        # also passes through the PII filter before it goes to the LLM.
+        trigger, _trigger_report = _PII.filter_text(trigger)
         tools = self.backend.list_tools()
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
