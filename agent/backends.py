@@ -1,15 +1,23 @@
 """
 Tool backends for the agent.
 
-DirectBackend calls the toolkit in-process and provides tool definitions in
-OpenAI function-calling format, so the LLM client (Ollama/Mock) can use them
-directly. An McpBackend (stdio) follows once the server runs stably.
+- McpBackend    : connects via the Model Context Protocol (stdio) to
+                  mcp_server/server.py — the production/demo route of the PoC.
+- DirectBackend : calls the same toolkit in-process. Used by
+                  the automated evaluation and the unit tests (faster and
+                  without a subprocess), with identical tool output.
+
+Both provide tool definitions in OpenAI function-calling format, so the
+LLM client (Ollama/Mock) can use them directly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import os
+import sys
 
 from autotask.client import get_autotask_client
 from mcp_server import toolkit
@@ -73,3 +81,58 @@ class DirectBackend:
         except TypeError as exc:
             return json.dumps({"error": f"Ongeldige argumenten voor {name}: {exc}"})
 
+    def close(self) -> None:  # symmetry with McpBackend
+        pass
+
+
+class McpBackend:
+    """Backend that talks to the server via MCP (stdio) — the real PoC route."""
+
+    name = "mcp"
+    _TIMEOUT = 120.0  # s, well above the 30s latency requirement
+
+    def __init__(self, state_file: str | None = None) -> None:
+        env = dict(os.environ)
+        if state_file:
+            env["LTS_MACHINE_STATE"] = state_file
+        self._env = env
+        self._loop = asyncio.new_event_loop()
+        self._exit_stack = None
+        self._session = None
+        self._loop.run_until_complete(self._connect())
+
+    async def _connect(self) -> None:
+        from contextlib import AsyncExitStack
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=sys.executable, args=["-m", "mcp_server.server"],
+            env=self._env)
+        self._exit_stack = AsyncExitStack()
+        read, write = await self._exit_stack.enter_async_context(
+            stdio_client(params))
+        self._session = await self._exit_stack.enter_async_context(
+            ClientSession(read, write))
+        await self._session.initialize()
+
+    def list_tools(self) -> list[dict]:
+        result = self._loop.run_until_complete(self._session.list_tools())
+        return [{"type": "function",
+                 "function": {"name": t.name,
+                              "description": t.description or "",
+                              "parameters": t.inputSchema or
+                              {"type": "object", "properties": {}}}}
+                for t in result.tools]
+
+    def call_tool(self, name: str, arguments: dict) -> str:
+        result = self._loop.run_until_complete(
+            self._session.call_tool(name, arguments=arguments))
+        parts = [c.text for c in result.content if getattr(c, "text", None)]
+        return "\n".join(parts) if parts else "{}"
+
+    def close(self) -> None:
+        if self._exit_stack is not None:
+            self._loop.run_until_complete(self._exit_stack.aclose())
+        self._loop.close()
