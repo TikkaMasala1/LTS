@@ -1,8 +1,10 @@
 """
 Simulator: generates representative "machine states" + log lines for the
-first support scenario of the PoC:
+three support scenarios of the PoC:
 
   1. disk_space   – disk space warnings (C: drive nearly full)
+  2. performance  – slow system (CPU/RAM pressure from a specific process)
+  3. vpn          – slow/unstable VPN connection (latency / packet loss)
 
 Plus 'healthy' states (no incident) as a control group.
 """
@@ -18,6 +20,7 @@ FIRST = ["Jan", "Sanne", "Pieter", "Fatima", "Lars", "Esra", "Daan", "Noor", "To
 LAST = ["de Vries", "Jansen", "Bakker", "Visser", "Yilmaz", "van Dijk", "Smit", "Mulder"]
 CUSTOMERS = ["Acme B.V.", "Zorggroep Flevo", "Bouwbedrijf Hendriks", "Notariskantoor Peters",
              "Logistiek Almere", "De Groene Kas", "FinTrust Advies"]
+PROCESSES_HEAVY = ["chrome.exe", "Teams.exe", "OneDrive.exe", "AcmeERP.exe", "PowerBI.exe"]
 VPN_GATEWAYS = ["vpn.acme.nl", "gw01.ultimum-vpn.nl", "vpn.zorgflevo.nl"]
 
 
@@ -93,6 +96,40 @@ def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
             f"{_ts(base,-2)}  ERROR AcmeERP   Could not write tempfile: DISK_FULL (0x70)",
         ]
         gt_action = "cleanup_disk"
+    elif scenario == "performance":
+        cpu = rng.randint(82, 99)
+        ram = rng.randint(85, 97)
+        culprit = rng.choice(PROCESSES_HEAVY)
+        top_procs = [
+            {"name": culprit, "cpu_pct": rng.randint(55, 88), "ram_mb": rng.randint(2500, 6000)},
+            {"name": "MsMpEng.exe", "cpu_pct": rng.randint(8, 18), "ram_mb": 350},
+            {"name": "Teams.exe", "cpu_pct": rng.randint(4, 9), "ram_mb": 800},
+        ]
+        state["culprit_process"] = culprit
+        logs += [
+            f"{_ts(base,-45)} WARN  Perf      CPU sustained above 90% for 15 minutes",
+            f"{_ts(base,-30)} WARN  Perf      Memory pressure: commit charge at {ram}%",
+            f"{_ts(base,-20)} WARN  AppHang   {culprit} not responding (PID {rng.randint(1000,9000)})",
+            f"{_ts(base,-5)}  INFO  User      {username} reports: 'computer is extreem traag vandaag'",
+        ]
+        gt_action = "restart_process"
+    elif scenario == "vpn":
+        vpn = {
+            "connected": True, "gateway": rng.choice(VPN_GATEWAYS),
+            "protocol": "IKEv2", "latency_ms": rng.randint(350, 900),
+            "packet_loss_pct": round(rng.uniform(6, 22), 1),
+            "throughput_mbps": rng.randint(1, 6),
+            "client_version": rng.choice(["4.9.0", "5.0.2"]),  # outdated
+            "split_tunnel": False,
+        }
+        logs += [
+            f"{_ts(base,-50)} WARN  VPN       High latency to {vpn['gateway']}: {vpn['latency_ms']} ms",
+            f"{_ts(base,-35)} WARN  VPN       Packet loss {vpn['packet_loss_pct']}% on tunnel adapter",
+            f"{_ts(base,-22)} ERROR VPN       Re-key timeout, tunnel renegotiated (3rd time this hour)",
+            f"{_ts(base,-8)}  INFO  User      {username} ({customer}) reports: 'VPN is heel traag, RDP valt steeds weg'",
+            f"{_ts(base,-6)}  INFO  Net       Egress via public IP {public_ip}",
+        ]
+        gt_action = "fix_vpn"
     else:  # healthy
         logs += [
             f"{_ts(base,-30)} INFO  Health    Scheduled check OK — no anomalies detected",
@@ -119,6 +156,8 @@ def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
         "expected_action": gt_action,
         "required_tools": {
             "disk_space": ["get_recent_logs", "get_disk_usage"],
+            "performance": ["get_recent_logs", "get_performance_metrics"],
+            "vpn": ["get_recent_logs", "get_vpn_status"],
             "healthy": ["get_recent_logs"],
         }[scenario],
     }
@@ -130,7 +169,7 @@ def generate_dataset(n_per_scenario: int = 14, n_healthy: int = 3, seed: int = 4
     rng = random.Random(seed)
     cases: list[dict] = []
     cid = 1
-    for scenario in ["disk_space"]:
+    for scenario in ["disk_space", "performance", "vpn"]:
         for _ in range(n_per_scenario):
             cases.append(make_case(cid, scenario, rng)); cid += 1
     for _ in range(n_healthy):
