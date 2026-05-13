@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox
 from google import genai
 from google.genai import types
-import os
 import json
 import datetime
 import psutil
