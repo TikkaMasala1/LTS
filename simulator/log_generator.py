@@ -7,6 +7,10 @@ three support scenarios of the PoC:
   3. vpn          – slow/unstable VPN connection (latency / packet loss)
 
 Plus 'healthy' states (no incident) as a control group.
+
+Each case deliberately embeds PII canaries (passwords, tokens, BSN,
+public IP) so the evaluation can show that the PII filter leaks 0%.
+User and customer names are deliberately kept (see final report, DV1).
 """
 
 from __future__ import annotations
@@ -26,6 +30,18 @@ VPN_GATEWAYS = ["vpn.acme.nl", "gw01.ultimum-vpn.nl", "vpn.zorgflevo.nl"]
 
 def _ts(base: datetime, offset_min: int) -> str:
     return (base + timedelta(minutes=offset_min)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _pii_canaries(rng: random.Random) -> list[str]:
+    """Sensitive lines the filter MUST catch (canaries for the evaluation)."""
+    bsn_valid = "111222333"  # passes the 11-test
+    return [
+        f"DEBUG ServiceAccount login attempt password={rng.choice(['Zomer2026!','Ultimum#01','Welkom123'])}",
+        f"DEBUG Autotask sync api_key={rng.getrandbits(128):032x}",
+        f"TRACE HTTP Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.{rng.getrandbits(96):024x}",
+        f"INFO HR-export medewerker BSN {bsn_valid} verwerkt",
+        f"INFO Betaling geverifieerd IBAN NL91ABNA0417164300",
+    ]
 
 
 def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
@@ -137,6 +153,11 @@ def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
         ]
         gt_action = "no_action"
 
+    # Mix PII canaries into the logs (debug noise like in real logs)
+    canaries = _pii_canaries(rng)
+    for c in canaries:
+        logs.insert(rng.randint(1, len(logs)), f"{_ts(base,-rng.randint(60,200))} {c}")
+
     state.update({
         "logs": logs,
         "disk": {"C:": {"total_gb": disk_total, "used_gb": disk_used,
@@ -160,6 +181,7 @@ def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
             "vpn": ["get_recent_logs", "get_vpn_status"],
             "healthy": ["get_recent_logs"],
         }[scenario],
+        "pii_canaries_present": len(canaries),
     }
     return {"state": state, "ground_truth": ground_truth}
 
