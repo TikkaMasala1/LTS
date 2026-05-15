@@ -58,9 +58,9 @@ def _is_valid_bsn(digits: str) -> bool:
     """Dutch 11-test for BSN (prevents false positives on random numbers)."""
     if len(digits) != 9 or not digits.isdigit():
         return False
-    weights = [9, 8, 7, 6, 5, 4, 3, 2, 1]
+    weights = [9, 8, 7, 6, 5, 4, 3, 2, -1]
     total = sum(int(d) * w for d, w in zip(digits, weights))
-    return total % 11 == 0
+    return total % 11 == 0 and total != 0
 
 
 def _is_private_ip(ip: str) -> bool:
