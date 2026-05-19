@@ -118,7 +118,7 @@ def get_system_info() -> str:
 def get_uptime() -> str:
     """System uptime in days (long uptime may indicate a reboot is needed)."""
     days = CTX.state.get("uptime_days", 0)
-    return _j({"uptime_days": days, "reboot_recommended": days >= 30})
+    return _j({"uptime_days": days, "reboot_recommended": days >= 14})
 
 
 # ---------------------------------------------------------------------------
