@@ -7,7 +7,7 @@ Een lokale AI-servicedeskagent op basis van het Model Context Protocol (MCP):
 diagnosticeert terugkerende incidenten (schijfruimte, performance, VPN) en maakt
 ná menselijke goedkeuring (Human-in-the-Loop) een ticket aan in Autotask.
 
-## Instalatie
+## Installatie
 
 Vereist Python 3.11+ en (voor het echte LLM) [Ollama](https://ollama.com).
 
