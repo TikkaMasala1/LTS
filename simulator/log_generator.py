@@ -49,7 +49,7 @@ def make_case(case_id: int, scenario: str, rng: random.Random) -> dict:
     user = f"{rng.choice(FIRST)} {rng.choice(LAST)}"
     username = (user[0] + "." + user.split(" ", 1)[1].replace(" ", "")).lower()
     customer = rng.choice(CUSTOMERS)
-    hostname = f"WS-{customer[:5].upper()}-{rng.randint(10, 99)}"
+    hostname = f"WS-{customer.split()[0].upper()[:5]}-{rng.randint(10, 99)}"
 
     state: dict = {
         "case_id": f"C{case_id:03d}",
