@@ -9,6 +9,8 @@ import subprocess
 import threading
 import time
 from dotenv import load_dotenv
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 load_dotenv()
 
