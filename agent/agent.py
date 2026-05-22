@@ -31,6 +31,9 @@ _PII = PIIFilter()
 
 MAX_ITERATIONS = 8
 
+VALID_ACTIONS = {"cleanup_disk", "restart_process", "restart_service",
+                 "update_vpn_client", "reconnect_vpn", "flush_dns", "no_action"}
+
 
 class Evidence(BaseModel):
     tool: str
@@ -131,6 +134,8 @@ class TroubleshooterAgent:
             if text:
                 try:
                     data = _extract_json(text)
+                    if data.get("proposed_action") not in VALID_ACTIONS:
+                        data["proposed_action"] = "no_action"
                     return Diagnosis.model_validate(data), attempts > 0, None
                 except (ValueError, json.JSONDecodeError, ValidationError):
                     pass
