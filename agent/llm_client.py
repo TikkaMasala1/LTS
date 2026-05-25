@@ -35,7 +35,7 @@ class OllamaClient:
     """Local LLM via Ollama (OpenAI-compatible endpoint, incl. tool calling)."""
 
     def __init__(self, model: str | None = None, base_url: str | None = None,
-                 temperature: float = 0.2) -> None:
+                 temperature: float = 0.1) -> None:
         if httpx is None:
             raise LLMError("httpx is vereist voor Ollama-modus (pip install httpx)")
         self.model = model or os.environ.get("OLLAMA_MODEL", "phi4-mini")
