@@ -29,7 +29,7 @@ from mcp_server.filters.pii_filter import PIIFilter
 
 _PII = PIIFilter()
 
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 12
 
 VALID_ACTIONS = {"cleanup_disk", "restart_process", "restart_service",
                  "update_vpn_client", "reconnect_vpn", "flush_dns", "no_action"}
