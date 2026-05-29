@@ -31,6 +31,100 @@ _PII = PIIFilter()
 
 MAX_ITERATIONS = 12
 
+# ---------------------------------------------------------------------------
+# Fallback: tool calls that appear as text in 'content' instead of 'tool_calls'
+# ---------------------------------------------------------------------------
+# Known quirk of phi4-mini in Ollama (among others): the model writes
+#   functools[{"name": "get_recent_logs", "arguments": {"max_lines": 40}}]
+# as plain text, depending on the Ollama version/chat template. This
+# parser recognizes that pattern (and bare JSON arrays/objects with a "name"
+# field matching an existing tool) and converts it to the
+# standard OpenAI format so the agent loop can continue normally.
+
+_EMBEDDED_CALL_RE = re.compile(r"functools\s*\[(.*)\]", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:json|python|tool_code)?\s*(.*?)```", re.DOTALL)
+_TOOL_TOKEN_RE = re.compile(r"<\|/?tool(?:_call)?\|>")
+_NAME_KEYS = ("name", "tool", "function", "tool_name")
+
+
+def _candidate_payloads(content: str) -> list[str]:
+    """Collect text fragments that may contain (a list of) tool calls."""
+    candidates: list[str] = []
+    # 1) functools[...] (phi4-mini quirk)
+    m = _EMBEDDED_CALL_RE.search(content)
+    if m:
+        candidates.append("[" + m.group(1).strip().rstrip(",") + "]")
+    # 2) contents of markdown code fences (```json ... ```)
+    candidates.extend(f.strip() for f in _FENCE_RE.findall(content))
+    # 3) content with tool tokens (<|tool|> ... <|/tool|>) stripped out
+    stripped = _TOOL_TOKEN_RE.sub("", content).strip()
+    candidates.append(stripped)
+    # 4) first [...] block and first {...} block in the text
+    for open_c, close_c in (("[", "]"), ("{", "}")):
+        i = content.find(open_c)
+        j = content.rfind(close_c)
+        if 0 <= i < j:
+            candidates.append(content[i:j + 1])
+    return candidates
+
+
+def _extract_embedded_calls(content: str | None,
+                            tool_names: set[str]) -> list[dict] | None:
+    """Recognize tool calls that appear as text in the content. Returns None
+    if the content has no (valid) embedded tool calls."""
+    if not content:
+        return None
+    for raw in _candidate_payloads(content):
+        if not raw:
+            continue
+        if raw.startswith("{"):
+            raw = f"[{raw}]"
+        if not raw.startswith("["):
+            continue
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(items, list) or not items:
+            continue
+        calls: list[dict] = []
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                calls = []
+                break
+            # Evidence items from the diagnosis ({"tool": ..., "finding": ...})
+            # and the diagnosis itself are not tool calls.
+            if "finding" in item or "scenario" in item:
+                calls = []
+                break
+            # The tool name may appear under different keys; for nested
+            # OpenAI form ({"function": {"name": ...}}) also look inside it.
+            name = next((item[k] for k in _NAME_KEYS
+                         if isinstance(item.get(k), str)), None)
+            if name is None and isinstance(item.get("function"), dict):
+                name = item["function"].get("name")
+                item = {**item, **item["function"]}
+            # Only accept if every element names an existing tool;
+            # otherwise this is probably the JSON diagnosis itself.
+            if name not in tool_names:
+                calls = []
+                break
+            args = item.get("arguments", item.get("parameters",
+                            item.get("args", {})))
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {}
+            calls.append({"id": f"embedded_{i}_{name}", "type": "function",
+                          "function": {"name": name,
+                                       "arguments": json.dumps(args)}})
+        if calls:
+            return calls
+    return None
+
 VALID_ACTIONS = {"cleanup_disk", "restart_process", "restart_service",
                  "update_vpn_client", "reconnect_vpn", "flush_dns", "no_action"}
 
@@ -89,10 +183,14 @@ class TroubleshooterAgent:
         ]
         tool_calls_log: list[dict] = []
         final_text: str | None = None
+        tool_names = {t["function"]["name"] for t in tools}
 
         for _ in range(MAX_ITERATIONS):
             reply = self.llm.chat(messages, tools=tools)
             calls = reply.get("tool_calls")
+            if not calls:
+                # Fallback: tool calls as text in content (phi4-mini quirk).
+                calls = _extract_embedded_calls(reply.get("content"), tool_names)
             if not calls:
                 final_text = reply.get("content") or ""
                 messages.append({"role": "assistant", "content": final_text})
