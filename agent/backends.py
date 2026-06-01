@@ -86,39 +86,91 @@ class DirectBackend:
 
 
 class McpBackend:
-    """Backend that talks to the server via MCP (stdio) — the real PoC route."""
+    """Backend that talks to the server via MCP (stdio) — the real PoC route.
+
+    Implementation note: the MCP client session uses anyio cancel scopes internally,
+    which must be opened and closed in the *same* asyncio task. Therefore
+    one long-running runner task runs here (in its own background thread)
+    that owns the session and handles all requests via a queue. The
+    synchronous methods (list_tools/call_tool) put work on that queue and
+    wait for the result. An earlier variant with separate run_until_complete
+    calls produced on Windows/Python 3.13+: "Attempted to exit cancel scope in
+    a different task than it was entered in".
+    """
 
     name = "mcp"
     _TIMEOUT = 120.0  # s, well above the 30s latency requirement
 
     def __init__(self, state_file: str | None = None) -> None:
+        import concurrent.futures
+        import threading
+
         env = dict(os.environ)
         if state_file:
             env["LTS_MACHINE_STATE"] = state_file
         self._env = env
-        self._loop = asyncio.new_event_loop()
-        self._exit_stack = None
-        self._session = None
-        self._loop.run_until_complete(self._connect())
 
-    async def _connect(self) -> None:
-        from contextlib import AsyncExitStack
+        self._requests: asyncio.Queue | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._startup = concurrent.futures.Future()  # ready or error at startup
+        self._thread = threading.Thread(target=self._thread_main,
+                                        name="mcp-backend", daemon=True)
+        self._thread.start()
+        # Wait until the session is initialized (or propagate the startup error).
+        self._startup.result(timeout=self._TIMEOUT)
 
+    # ----- background thread: one event loop, one runner task ------------
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._runner())
+        except Exception as exc:  # noqa: BLE001
+            if not self._startup.done():
+                self._startup.set_exception(exc)
+
+    async def _runner(self) -> None:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
         params = StdioServerParameters(
             command=sys.executable, args=["-m", "mcp_server.server"],
             env=self._env)
-        self._exit_stack = AsyncExitStack()
-        read, write = await self._exit_stack.enter_async_context(
-            stdio_client(params))
-        self._session = await self._exit_stack.enter_async_context(
-            ClientSession(read, write))
-        await self._session.initialize()
+
+        self._loop = asyncio.get_running_loop()
+        self._requests = asyncio.Queue()
+
+        # Context managers are opened and closed in THIS task.
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                self._startup.set_result(True)
+                while True:
+                    item = await self._requests.get()
+                    if item is None:  # sentinel: shut down
+                        break
+                    coro_fn, args, future = item
+                    try:
+                        result = await coro_fn(session, *args)
+                        future.set_result(result)
+                    except Exception as exc:  # noqa: BLE001
+                        future.set_exception(exc)
+
+    def _submit(self, coro_fn, *args):
+        """Put work on the runner task's queue and wait synchronously."""
+        import concurrent.futures
+        if self._loop is None or self._requests is None:
+            raise RuntimeError("MCP-backend is niet (meer) verbonden")
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        self._loop.call_soon_threadsafe(
+            self._requests.put_nowait, (coro_fn, args, future))
+        return future.result(timeout=self._TIMEOUT)
+
+    # ----- public, synchronous interface ----------------------------------
 
     def list_tools(self) -> list[dict]:
-        result = self._loop.run_until_complete(self._session.list_tools())
+        async def _list(session):
+            return await session.list_tools()
+        result = self._submit(_list)
         return [{"type": "function",
                  "function": {"name": t.name,
                               "description": t.description or "",
@@ -127,12 +179,19 @@ class McpBackend:
                 for t in result.tools]
 
     def call_tool(self, name: str, arguments: dict) -> str:
-        result = self._loop.run_until_complete(
-            self._session.call_tool(name, arguments=arguments))
+        async def _call(session, name, arguments):
+            return await session.call_tool(name, arguments=arguments)
+        result = self._submit(_call, name, arguments)
         parts = [c.text for c in result.content if getattr(c, "text", None)]
         return "\n".join(parts) if parts else "{}"
 
     def close(self) -> None:
-        if self._exit_stack is not None:
-            self._loop.run_until_complete(self._exit_stack.aclose())
-        self._loop.close()
+        if self._loop is not None and self._requests is not None:
+            try:
+                self._loop.call_soon_threadsafe(
+                    self._requests.put_nowait, None)  # sentinel
+            except RuntimeError:
+                pass  # loop already closed
+        self._thread.join(timeout=10.0)
+        self._loop = None
+        self._requests = None
