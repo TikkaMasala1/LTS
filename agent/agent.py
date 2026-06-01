@@ -46,6 +46,14 @@ _FENCE_RE = re.compile(r"```(?:json|python|tool_code)?\s*(.*?)```", re.DOTALL)
 _TOOL_TOKEN_RE = re.compile(r"<\|/?tool(?:_call)?\|>")
 _NAME_KEYS = ("name", "tool", "function", "tool_name")
 
+NUDGE_PROMPT = (
+    "Je hebt nog geen enkele tool aangeroepen en dus geen feitelijke data. "
+    "Een diagnose zonder toolresultaten is niet toegestaan. Roep nu eerst "
+    "de tool get_recent_logs aan (via een tool call, niet als tekst), "
+    "verifieer daarna met een passende diagnose-tool, en geef pas dan je "
+    "JSON-diagnose."
+)
+
 
 def _candidate_payloads(content: str) -> list[str]:
     """Collect text fragments that may contain (a list of) tool calls."""
@@ -184,6 +192,7 @@ class TroubleshooterAgent:
         tool_calls_log: list[dict] = []
         final_text: str | None = None
         tool_names = {t["function"]["name"] for t in tools}
+        nudged = False
 
         for _ in range(MAX_ITERATIONS):
             reply = self.llm.chat(messages, tools=tools)
@@ -192,6 +201,14 @@ class TroubleshooterAgent:
                 # Fallback: tool calls as text in content (phi4-mini quirk).
                 calls = _extract_embedded_calls(reply.get("content"), tool_names)
             if not calls:
+                # Diagnosis without a single tool call? Push back once:
+                # without factual data, any diagnosis is by definition a guess.
+                if not tool_calls_log and not nudged:
+                    nudged = True
+                    messages.append({"role": "assistant",
+                                     "content": reply.get("content") or ""})
+                    messages.append({"role": "user", "content": NUDGE_PROMPT})
+                    continue
                 final_text = reply.get("content") or ""
                 messages.append({"role": "assistant", "content": final_text})
                 break
