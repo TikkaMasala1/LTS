@@ -22,6 +22,7 @@ Measures the five metrics from the measurement table:
 Usage:
   python -m evaluation.quantitative                 # mock LLM (pipeline test)
   python -m evaluation.quantitative --llm ollama    # real measurement (Phi-4-mini)
+  python -m evaluation.quantitative --llm gemini    # temporary, cloud (test data only!)
   python -m evaluation.quantitative --backend mcp   # via the real MCP server
 
 Output: evaluation/results/results.csv + results.md (table for the final report).
@@ -37,7 +38,7 @@ from pathlib import Path
 
 from agent.agent import TroubleshooterAgent
 from agent.backends import DirectBackend, McpBackend
-from agent.llm_client import MockLLM, OllamaClient
+from agent.llm_client import GeminiClient, MockLLM, OllamaClient
 from mcp_server.filters.pii_filter import detect_leaks
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,7 +158,7 @@ Per-case resultaten: `results.csv`.
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kwantitatieve evaluatie LTS PoC")
-    parser.add_argument("--llm", choices=["mock", "ollama"], default="mock")
+    parser.add_argument("--llm", choices=["mock", "ollama", "gemini"], default="mock")
     parser.add_argument("--backend", choices=["direct", "mcp"], default="direct")
     parser.add_argument("--limit", type=int, default=0,
                         help="Beperk het aantal cases (0 = alles)")
@@ -176,7 +177,8 @@ def main() -> None:
         else:
             backend = DirectBackend()
             backend.load_state(state)
-        llm = {"mock": MockLLM, "ollama": OllamaClient}[args.llm]()
+        llm = {"mock": MockLLM, "ollama": OllamaClient,
+               "gemini": GeminiClient}[args.llm]()
         return TroubleshooterAgent(backend, llm), backend
 
     rows = []
