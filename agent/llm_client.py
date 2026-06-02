@@ -6,6 +6,11 @@ LLM clients for the agent.
   phi4-mini (choice justified in PvA §2.2.1/§2.3 — 4 GB VRAM scenario).
   For the 16 GB scenario: OLLAMA_MODEL=qwen3:14b.
 
+- GeminiClient : temporary cloud replacement via the Google Gemini API
+  (OpenAI-compatible endpoint). Only for development/tests with the
+  simulated dataset when no local GPU is available; deliberately
+  breaks the data sovereignty of the final solution (see class docstring).
+
 - MockLLM : deterministic, rule-based fallback with an identical
   interface. Makes it possible to run and demo the full pipeline (MCP tools, PII
   filter, HitL, Autotask, evaluation) without a
@@ -63,6 +68,57 @@ class OllamaClient:
                 f"Draai 'ollama serve' en 'ollama pull {self.model}'. ({exc})"
             ) from exc
         msg = resp.json()["choices"][0]["message"]
+        return msg
+
+
+class GeminiClient:
+    """Google Gemini via the OpenAI-compatible endpoint (temporary replacement).
+
+    NOTE — deviation from the project goal: this sends prompts and (filtered)
+    log context to an external cloud API and thereby breaks the
+    data sovereignty that is central to this PoC (PvA §1.4, §2.5). Only
+    intended as a temporary replacement during development/tests when no
+    local GPU is available — never use with real customer data, only with
+    the simulated dataset. In this mode the PII filter is no longer an extra
+    defense layer but the only one; the PII leak metric (0% requirement) is
+    therefore extra relevant here. Requires: GEMINI_API_KEY (https://aistudio.google.com).
+    """
+
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+    def __init__(self, model: str | None = None, api_key: str | None = None,
+                 temperature: float = 0.1) -> None:
+        if httpx is None:
+            raise LLMError("httpx is vereist voor Gemini-modus (pip install httpx)")
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        if not self.api_key:
+            raise LLMError("GEMINI_API_KEY ontbreekt (zet deze in .env of als "
+                           "omgevingsvariabele; sleutel via https://aistudio.google.com)")
+        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.temperature = temperature
+
+    @property
+    def name(self) -> str:
+        return f"gemini/{self.model}"
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        body: dict = {"model": self.model, "messages": messages,
+                      "temperature": self.temperature}
+        if tools:
+            body["tools"] = tools
+        try:
+            resp = httpx.post(f"{self.BASE_URL}/chat/completions",
+                              headers={"Authorization": f"Bearer {self.api_key}"},
+                              json=body, timeout=120.0)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(f"Gemini API-fout {exc.response.status_code}: "
+                           f"{exc.response.text[:300]}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"Gemini niet bereikbaar: {exc}") from exc
+        msg = resp.json()["choices"][0]["message"]
+        # Normalize: some responses lack 'content' on tool calls.
+        msg.setdefault("content", None)
         return msg
 
 
@@ -187,10 +243,12 @@ class MockLLM:
 
 
 def get_llm(use_mock: bool | None = None):
-    """Factory. LTS_LLM=mock|ollama (default: ollama)."""
+    """Factory. LTS_LLM=mock|ollama|gemini (default: ollama)."""
     if use_mock is True:
         return MockLLM()
     choice = os.environ.get("LTS_LLM", "ollama") if use_mock is None else "ollama"
     if choice == "mock":
         return MockLLM()
+    if choice == "gemini":
+        return GeminiClient()
     return OllamaClient()
