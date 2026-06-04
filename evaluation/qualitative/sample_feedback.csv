@@ -1,0 +1,4 @@
+respondent,sessie,Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,open_twijfel,open_ontbreekt,open_volgende_incidenten,open_niet_vertrouwen,open_overig
+R1,1,4,5,4,5,5,4,4,4,"Bij de VPN-case met lage packet loss twijfelde ik of het echt de client was","Knop om direct de logregels te zien die de agent gebruikte","Printerproblemen en wachtwoordresets","Als de confidence onder de 70% zit zou ik zelf kijken","Bewijs per conclusie is erg prettig"
+R2,1,5,4,4,4,5,3,4,3,"Performance-case: kon ook een Windows-update zijn","Mogelijkheid om de actie aan te passen voor goedkeuren","Outlook/Office-crashes","Bij klanten met maatwerksoftware","Responstijd mag iets sneller op de test-VM"
+R3,2,4,4,5,5,5,4,5,4,"Geen echte twijfel deze sessie","Filter op klant in de wachtrij","Schijfencryptie/BitLocker-meldingen","Nieuwe klanten waar we de omgeving nog niet kennen","Namen zichtbaar houden was de juiste keuze"

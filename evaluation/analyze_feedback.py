@@ -4,6 +4,8 @@ Qualitative evaluation — analysis of the feedback forms.
 Input : evaluation/qualitative/feedback_responses.csv
         (same column layout as sample_feedback.csv; one row per respondent)
 Output: evaluation/results/qualitative_summary.md
+        - Mean + spread per Likert question (Q1–Q8)
+        - Thematic clustering of open answers (keyword-based)
         - Anonymized quotes per theme (R1, R2, ...)
 
 Usage:
@@ -16,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import statistics
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +36,20 @@ LIKERT = {
     "Q6": "Responstijd acceptabel",
     "Q7": "Verlaagt werkdruk merkbaar",
     "Q8": "Vertrouwen voor productiegebruik",
+}
+
+OPEN_FIELDS = ["open_twijfel", "open_ontbreekt", "open_volgende_incidenten",
+               "open_niet_vertrouwen", "open_overig"]
+
+# Keyword-based themes for the open answers
+THEMES = {
+    "Vertrouwen & confidence": ["twijfel", "vertrouw", "confidence", "zeker"],
+    "Transparantie & bewijs": ["bewijs", "bron", "logregel", "uitleg", "transparant"],
+    "UI/Workflow-verbeteringen": ["knop", "filter", "aanpassen", "scherm", "wachtrij"],
+    "Uitbreiding scenario's": ["printer", "wachtwoord", "outlook", "office",
+                               "bitlocker", "incident"],
+    "Performance/responstijd": ["responstijd", "snel", "traag", "latency"],
+    "Privacy & context (namen)": ["naam", "namen", "klant", "context", "privacy"],
 }
 
 
@@ -56,8 +73,31 @@ def analyze(path: Path) -> str:
         lines.append(f"| {q} | {label} | **{statistics.mean(scores):.1f}** | "
                      f"{min(scores)}–{max(scores)} | {agree}/{len(scores)} |")
 
-    lines.append("\n---\n*Deze samenvatting vormt de basis voor Bijlage E "
-                 "van het eindverslag.*")
+    # Thematic analysis of open answers
+    theme_quotes: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        rid = r.get("respondent", "?")
+        for field in OPEN_FIELDS:
+            answer = (r.get(field) or "").strip()
+            if not answer:
+                continue
+            lower = answer.lower()
+            matched = False
+            for theme, keywords in THEMES.items():
+                if any(k in lower for k in keywords):
+                    theme_quotes[theme].append(f"*\u201c{answer}\u201d* — {rid}")
+                    matched = True
+            if not matched:
+                theme_quotes["Overig"].append(f"*\u201c{answer}\u201d* — {rid}")
+
+    lines.append("\n## Thema's uit de open antwoorden\n")
+    for theme, quotes in theme_quotes.items():
+        lines.append(f"### {theme} ({len(quotes)} fragment(en))")
+        lines.extend(f"- {q}" for q in quotes)
+        lines.append("")
+
+    lines.append("---\n*Citaten zijn geanonimiseerd (respondent-ID's). Deze "
+                 "samenvatting vormt de basis voor Bijlage E van het eindverslag.*")
     return "\n".join(lines)
 
 
