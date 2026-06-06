@@ -55,3 +55,22 @@ Melding/trigger: {trigger}
 
 Onderzoek het incident met je tools en lever daarna je JSON-diagnose.
 """
+
+# Default text for the Autotask ticket created after approval.
+TICKET_TEMPLATE = """\
+[LTS-agent diagnose — goedgekeurd door technicus]
+
+Endpoint  : {hostname}
+Klant     : {customer}
+Gebruiker : {user}
+
+Scenario  : {scenario}
+Oorzaak   : {root_cause}
+Actie     : {proposed_action} — {action_details}
+Confidence: {confidence:.0%}
+
+Bewijs (bronnen):
+{evidence_lines}
+
+Latency diagnose: {latency:.1f}s | Model: {model}
+"""
