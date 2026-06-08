@@ -122,7 +122,7 @@ with tab_diag:
             f"**OS:** {state['os']} · uptime {state['uptime_days']} d")
     with col_logs:
         st.subheader("Recente logregels (ruw, vóór filtering)")
-        st.code("\n".join(state["logs"][:8]), language="log")
+        st.code("\n".join(state["logs"][-8:]), language="log")
 
     if st.button("Start diagnose", type="primary", use_container_width=True):
         with st.spinner("Agent verzamelt bewijs via MCP-tools…"):
