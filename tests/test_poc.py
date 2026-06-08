@@ -2,7 +2,8 @@
 Unit and integration tests for the LTS PoC.
 
 Run:  pytest -q
-Coverage:  PII filter (security requirement), Autotask HitL draft flow (functional eis 3).
+Coverage:  PII filter (security requirement), Autotask HitL draft flow (functional
+          requirement 3), end-to-end agent pipeline on all three scenarios.
 """
 
 from __future__ import annotations
@@ -103,3 +104,63 @@ class TestAutotaskHitL:
                                feedback="diagnose onjuist")
         assert res["status"] == "REJECTED" and at.search_tickets("ALL") == []
 
+
+# ---------------------------------------------------------------------------
+# Agent end-to-end (DirectBackend + MockLLM) across the three scenarios
+# ---------------------------------------------------------------------------
+
+class TestAgentPipeline:
+    @pytest.fixture()
+    def cases(self):
+        from simulator.log_generator import make_case
+        import random
+        rng = random.Random(7)
+        return {s: make_case(i, s, rng)
+                for i, s in enumerate(["disk_space", "performance", "vpn", "healthy"], 1)}
+
+    @pytest.mark.parametrize("scenario", ["disk_space", "performance", "vpn", "healthy"])
+    def test_correct_scenario_detected(self, cases, scenario):
+        from agent.agent import TroubleshooterAgent
+        from agent.backends import DirectBackend
+        from agent.llm_client import MockLLM
+
+        case = cases[scenario]
+        backend = DirectBackend()
+        backend.load_state(case["state"])
+        agent = TroubleshooterAgent(backend, MockLLM())
+        result = agent.diagnose(hostname=case["state"]["hostname"],
+                                customer=case["state"]["customer"],
+                                user=case["state"]["user"])
+        assert result.diagnosis.scenario == scenario
+        assert "get_recent_logs" in [t["name"] for t in result.tool_calls]
+
+    def test_no_pii_reaches_llm(self, cases):
+        from agent.agent import TroubleshooterAgent
+        from agent.backends import DirectBackend
+        from agent.llm_client import MockLLM
+        from mcp_server.filters.pii_filter import detect_leaks
+
+        case = cases["disk_space"]
+        # Canaries are in the raw logs...
+        assert detect_leaks("\n".join(case["state"]["logs"]))
+        backend = DirectBackend()
+        backend.load_state(case["state"])
+        agent = TroubleshooterAgent(backend, MockLLM())
+        result = agent.diagnose(hostname="h", customer="c", user="u")
+        # ...but not in what the LLM actually saw.
+        assert detect_leaks(result.llm_input_transcript) == []
+
+    def test_agent_only_proposes_never_executes(self, cases):
+        from agent.agent import TroubleshooterAgent
+        from agent.backends import DirectBackend
+        from agent.llm_client import MockLLM
+        from mcp_server import toolkit
+
+        case = cases["vpn"]
+        backend = DirectBackend()
+        backend.load_state(case["state"])
+        agent = TroubleshooterAgent(backend, MockLLM())
+        agent.diagnose(hostname="h", customer="c", user="u")
+        out = json.loads(toolkit.propose_remediation("reconnect_vpn", "t", "r"))
+        assert out["executed"] is False
+        assert out["status"] == "PENDING_HUMAN_APPROVAL"
