@@ -2,7 +2,7 @@
 Unit and integration tests for the LTS PoC.
 
 Run:  pytest -q
-Dekking:  PII-filter (security-eis).
+Coverage:  PII filter (security requirement), Autotask HitL draft flow (functional eis 3).
 """
 
 from __future__ import annotations
@@ -72,4 +72,34 @@ class TestPIIFilter:
                  "IBAN NL91ABNA0417164300")
         cleaned, _ = self.f.filter_text(dirty)
         assert detect_leaks(dirty) and not detect_leaks(cleaned)
+
+
+# ---------------------------------------------------------------------------
+# Autotask: HitL draft flow (functional requirement 3)
+# ---------------------------------------------------------------------------
+
+class TestAutotaskHitL:
+    def test_draft_is_not_a_ticket(self):
+        from autotask.client import MockAutotaskClient
+        at = MockAutotaskClient()
+        at.draft_ticket("Test", "beschrijving")
+        assert at.search_tickets("ALL") == []  # nothing created without approval
+        assert len(at.list_drafts()) == 1
+
+    def test_approve_creates_ticket(self):
+        from autotask.client import MockAutotaskClient
+        at = MockAutotaskClient()
+        d = at.draft_ticket("Disk vol op WS-ACME-42", "details")
+        res = at.resolve_draft(d["draft_id"], approved=True, approver="S. Bakker")
+        assert res["status"] == "APPROVED"
+        assert res["ticket"]["ticketNumber"].startswith("T2026")
+        assert len(at.search_tickets("open")) == 1
+
+    def test_reject_creates_nothing(self):
+        from autotask.client import MockAutotaskClient
+        at = MockAutotaskClient()
+        d = at.draft_ticket("x", "y")
+        res = at.resolve_draft(d["draft_id"], approved=False, approver="S. Bakker",
+                               feedback="diagnose onjuist")
+        assert res["status"] == "REJECTED" and at.search_tickets("ALL") == []
 
