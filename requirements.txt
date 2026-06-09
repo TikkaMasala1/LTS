@@ -1,3 +1,5 @@
+# Fallback for pip users. Authoritative dependency file: pyproject.toml
+# Recommended install:  uv sync   (see README §1)
 # Core
 mcp>=1.2.0              # Model Context Protocol SDK (FastMCP + stdio client)
 pydantic>=2.6

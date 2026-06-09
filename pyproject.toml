@@ -1,0 +1,27 @@
+[project]
+name = "lts-poc"
+version = "0.1.0"
+description = "De lokale troubleshooter — secure-by-design MCP-agent (PoC, stage Ultimum MSP)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2.0",          # Model Context Protocol SDK (FastMCP + stdio client)
+    "pydantic>=2.6",
+    "httpx>=0.27",         # Ollama, Gemini and Autotask API calls
+    "python-dotenv>=1.0",
+    "streamlit>=1.35",     # Human-in-the-Loop UI
+    "psutil>=5.9",         # live mode (optional)
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# No package build needed: this project runs as standalone modules
+# (python -m ...), not as an installed package.
+package = false
