@@ -43,6 +43,11 @@ class OllamaClient:
     - OLLAMA_MODEL   : model name (default phi4-mini; 16GB: qwen3:14b)
     - OLLAMA_URL     : endpoint (default http://localhost:11434)
     - OLLAMA_TIMEOUT : HTTP timeout in seconds (default 300)
+    - OLLAMA_THINK=1 : keep qwen3 models' 'thinking' mode ON.
+      By default we disable it via Qwen's '/no_think' soft switch in the
+      system prompt: reasoning aloud before each tool call cost in
+      practice 100+ seconds per case and blows the 30s latency requirement,
+      while diagnosis quality for these tasks barely differs.
     """
 
     def __init__(self, model: str | None = None, base_url: str | None = None,
@@ -54,12 +59,19 @@ class OllamaClient:
                          "http://localhost:11434")).rstrip("/")
         self.temperature = temperature
         self.timeout = float(os.environ.get("OLLAMA_TIMEOUT", "300"))
+        self.no_think = (self.model.lower().startswith("qwen3")
+                         and os.environ.get("OLLAMA_THINK", "0") != "1")
 
     @property
     def name(self) -> str:
         return f"ollama/{self.model}"
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        if self.no_think and messages and messages[0].get("role") == "system" \
+                and "/no_think" not in (messages[0].get("content") or ""):
+            messages = [{**messages[0],
+                         "content": (messages[0]["content"] or "") + "\n/no_think"},
+                        *messages[1:]]
         body: dict = {"model": self.model, "messages": messages,
                       "temperature": self.temperature, "stream": False}
         if tools:
@@ -81,6 +93,10 @@ class OllamaClient:
                 f"Draai 'ollama serve' en 'ollama pull {self.model}'. ({exc})"
             ) from exc
         msg = resp.json()["choices"][0]["message"]
+        # Qwen3 may still send (empty) <think> blocks despite /no_think.
+        if msg.get("content"):
+            msg["content"] = re.sub(r"<think>.*?</think>", "",
+                                    msg["content"], flags=re.DOTALL).strip()
         return msg
 
 
