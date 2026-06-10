@@ -37,7 +37,13 @@ class LLMError(RuntimeError):
 
 
 class OllamaClient:
-    """Local LLM via Ollama (OpenAI-compatible endpoint, incl. tool calling)."""
+    """Local LLM via Ollama (OpenAI-compatible endpoint, incl. tool calling).
+
+    Env options:
+    - OLLAMA_MODEL   : model name (default phi4-mini; 16GB: qwen3:14b)
+    - OLLAMA_URL     : endpoint (default http://localhost:11434)
+    - OLLAMA_TIMEOUT : HTTP timeout in seconds (default 300)
+    """
 
     def __init__(self, model: str | None = None, base_url: str | None = None,
                  temperature: float = 0.1) -> None:
@@ -47,7 +53,7 @@ class OllamaClient:
         self.base_url = (base_url or os.environ.get("OLLAMA_URL",
                          "http://localhost:11434")).rstrip("/")
         self.temperature = temperature
-        self.timeout = 120.0
+        self.timeout = float(os.environ.get("OLLAMA_TIMEOUT", "300"))
 
     @property
     def name(self) -> str:
@@ -62,6 +68,13 @@ class OllamaClient:
             resp = httpx.post(f"{self.base_url}/v1/chat/completions",
                               json=body, timeout=self.timeout)
             resp.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise LLMError(
+                f"Ollama-antwoord duurde langer dan {self.timeout:.0f}s "
+                f"(model {self.model}). Het model is te traag voor deze "
+                f"hardware: controleer met 'ollama ps' of het op de GPU "
+                f"draait, kies een kleiner/sneller model, of verhoog "
+                f"OLLAMA_TIMEOUT. ({exc})") from exc
         except Exception as exc:  # noqa: BLE001
             raise LLMError(
                 f"Ollama niet bereikbaar op {self.base_url}. "
