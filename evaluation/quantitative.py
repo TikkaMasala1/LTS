@@ -56,7 +56,7 @@ def load_cases() -> list[dict]:
     return json.loads(DATASET.read_text(encoding="utf-8"))
 
 
-def evaluate_case(agent_factory, case: dict) -> dict:
+def evaluate_case(agent_factory, case: dict, dump_dir=None) -> dict:
     state, gt = case["state"], case["ground_truth"]
     agent, backend = agent_factory(state)
     try:
@@ -84,6 +84,11 @@ def evaluate_case(agent_factory, case: dict) -> dict:
     tools_ok = required_ok and not invalid_calls
 
     leaks = detect_leaks(result.llm_input_transcript)
+
+    if dump_dir is not None:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        (dump_dir / f"{state['case_id']}.txt").write_text(
+            result.llm_input_transcript, encoding="utf-8")
 
     return {
         "case_id": state["case_id"],
@@ -160,6 +165,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Kwantitatieve evaluatie LTS PoC")
     parser.add_argument("--llm", choices=["mock", "ollama", "gemini"], default="mock")
     parser.add_argument("--backend", choices=["direct", "mcp"], default="direct")
+    parser.add_argument("--dump-transcripts", action="store_true",
+                        help="schrijf per case het volledige LLM-transcript "
+                             "naar evaluation/results/transcripts/ (debug)")
     parser.add_argument("--limit", type=int, default=0,
                         help="Beperk het aantal cases (0 = alles)")
     args = parser.parse_args()
@@ -183,7 +191,8 @@ def main() -> None:
 
     rows = []
     for i, case in enumerate(cases, 1):
-        row = evaluate_case(agent_factory, case)
+        dump_dir = (RESULTS_DIR / "transcripts") if args.dump_transcripts else None
+        row = evaluate_case(agent_factory, case, dump_dir=dump_dir)
         rows.append(row)
         status = "OK" if row["correct"] else "X"
         print(f"[{i:02d}/{len(cases)}] {row['case_id']} {status} "
