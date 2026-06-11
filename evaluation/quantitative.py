@@ -27,6 +27,7 @@ Usage:
 
 Output: evaluation/results/results.csv + results.md (table for the final report).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -111,7 +112,8 @@ def evaluate_case(agent_factory, case: dict, dump_dir=None) -> dict:
 
 def summarize(rows: list[dict]) -> dict:
     n = len(rows)
-    latencies = [r["latency_s"] for r in rows] or [0.0]
+    latencies = [r["latency_s"] for r in rows
+                 if not r.get("error")] or [0.0]
     return {
         "n_cases": n,
         "accuracy": sum(r["correct"] for r in rows) / n,
@@ -192,7 +194,21 @@ def main() -> None:
     rows = []
     for i, case in enumerate(cases, 1):
         dump_dir = (RESULTS_DIR / "transcripts") if args.dump_transcripts else None
-        row = evaluate_case(agent_factory, case, dump_dir=dump_dir)
+        try:
+            row = evaluate_case(agent_factory, case, dump_dir=dump_dir)
+        except Exception as exc:  # noqa: BLE001 — one case must not stop the run
+            state, gt = case["state"], case["ground_truth"]
+            row = {"case_id": state["case_id"], "gt_scenario": gt["scenario"],
+                   "pred_scenario": "error", "pred_action": "", "confidence": 0.0,
+                   "correct": False, "hallucinated": False, "tools_ok": False,
+                   "tools_called": "", "latency_s": 0.0, "pii_leaks": 0,
+                   "pii_canaries_in_input": gt["pii_canaries_present"],
+                   "parse_recovered": False, "model": args.llm,
+                   "error": f"{type(exc).__name__}: {exc}"}
+            print(f"[{i:02d}/{len(cases)}] {row['case_id']} X FOUT — "
+                  f"{str(exc)[:120]}")
+            rows.append(row)
+            continue
         rows.append(row)
         status = "OK" if row["correct"] else "X"
         print(f"[{i:02d}/{len(cases)}] {row['case_id']} {status} "
