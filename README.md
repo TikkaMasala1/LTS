@@ -207,3 +207,23 @@ Blijft het misgaan, controleer dan in deze volgorde:
 3. Vergelijk de runs in `results.csv` (kolommen `tools_called` en `model`) —
    dit verschil tussen papieren MCA-keuze en praktijkvalidatie is bruikbaar
    bewijs voor deelvraag 4 in het eindverslag.
+
+## Troubleshooting: extreme latency / timeouts met qwen3
+
+Qwen3-modellen "denken" standaard hardop (thinking mode) vóór elke tool call;
+in de praktijk kostte dat 100+ seconden per case en liep de HTTP-client tegen
+zijn timeout aan. Maatregelen in de code:
+
+- De `OllamaClient` schakelt thinking voor qwen3-modellen automatisch uit via
+  Qwen's `/no_think`-soft-switch (terugzetten kan met `OLLAMA_THINK=1`) en
+  stript eventuele `<think>`-blokken uit de respons.
+- De HTTP-timeout is configureerbaar via `OLLAMA_TIMEOUT` (default 300 s) en
+  een timeout geeft nu een eerlijke foutmelding (traag model ≠ onbereikbaar).
+- De evaluatie is crash-bestendig: een mislukte case wordt als foutregel in
+  `results.csv` opgenomen (kolom `error`, `pred_scenario=error`, telt als
+  incorrect) en de run gaat door met de volgende case. Foutcases tellen niet
+  mee in de latency-statistiek.
+
+Blijft de latency te hoog, controleer dan met `ollama ps` of het model echt
+op de GPU draait (kolom *Processor*: `100% GPU`). Bij `100% CPU` is geen
+enkel 4B-model snel genoeg voor de 30s-eis.
