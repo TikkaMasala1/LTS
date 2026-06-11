@@ -180,3 +180,30 @@ tests/test_poc.py      Unit-/integratietests
 | Fouttolerantie | Exponential backoff (1→30 s) bij 429/5xx; mock-fallback bij offline sandbox |
 | Anti-hallucinatie | Bron verplicht per conclusie; "unknown" bij twijfel; verzonnen bron = hallucinatie in de meting |
 | Verantwoording | Append-only auditlog van alle HitL-beslissingen |
+
+## Troubleshooting: model roept geen tools aan
+
+Symptoom: `tools_called` is leeg in `results.csv`, hallucinatie-rate schiet
+omhoog en tool-calling accuracy is 0% — terwijl een deel van de diagnoses
+"toevallig" klopt. Oorzaak: het model levert geen structured tool calls.
+Bekend bij **phi4-mini in Ollama**: afhankelijk van de Ollama-versie en het
+chat-template ontbreekt tool-ondersteuning, of zet het model zijn tool calls
+als platte tekst in het antwoord (het `functools[{...}]`-formaat).
+
+De agent bevat hiervoor twee vangnetten (zie `agent/agent.py`):
+1. een fallback-parser die embedded/tekstuele tool calls herkent en alsnog
+   uitvoert, en
+2. een eenmalige "nudge" die het model terugstuurt als het een diagnose
+   geeft zonder ook maar één tool te hebben aangeroepen.
+
+Blijft het misgaan, controleer dan in deze volgorde:
+1. `ollama show phi4-mini` → staat **tools** bij *Capabilities*? Zo niet:
+   `ollama pull phi4-mini` opnieuw (template is later toegevoegd) en werk
+   Ollama zelf bij naar de nieuwste versie.
+2. Probeer een model met robuuste native tool calling als alternatief binnen
+   het 4 GB-scenario: `OLLAMA_MODEL=qwen3:4b` (Qwen3-4B was de runner-up in
+   de multicriteria-analyse, PvA §2.2.1). Voor het 16 GB-scenario:
+   `OLLAMA_MODEL=qwen3:14b`.
+3. Vergelijk de runs in `results.csv` (kolommen `tools_called` en `model`) —
+   dit verschil tussen papieren MCA-keuze en praktijkvalidatie is bruikbaar
+   bewijs voor deelvraag 4 in het eindverslag.
