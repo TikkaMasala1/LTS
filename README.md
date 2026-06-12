@@ -10,10 +10,10 @@ ondersteuningsscenario's — **schijfruimte**, **performance (traag systeem)** e
 een ticket aan in **Autotask**.
 
 ```
-                ┌────────────────────────  endpoint / test-VM  ───────────────────────┐
+                ┌────────────────────────  endpoint / test-VM  ────────────────────────┐
                 │                                                                      │
-  logs/metrics ─┤  ┌──────────────┐   PII-filterlaag   ┌──────────────────────────┐   │
-                │  │  Simulator / │ ─────────────────► │  MCP-server (FastMCP)    │   │
+  logs/metrics ─┤  ┌──────────────┐   PII-filterlaag    ┌──────────────────────────┐   │
+                │  │  Simulator / │ ─────────────────►  │  MCP-server (FastMCP)    │   │
                 │  │  live psutil │  (selectief: wacht- │  15+ tools · resources · │   │
                 │  └──────────────┘   woorden, tokens,  │  prompts                 │   │
                 │                     BSN, IBAN, publ.  └─────────────┬────────────┘   │
