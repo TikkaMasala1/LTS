@@ -114,11 +114,14 @@ def summarize(rows: list[dict]) -> dict:
     n = len(rows)
     latencies = [r["latency_s"] for r in rows
                  if not r.get("error")] or [0.0]
+    m = len(latencies)  # error cases are excluded from the latency statistic
+    n_errors = sum(1 for r in rows if r.get("error"))
     return {
         "n_cases": n,
+        "n_errors": n_errors,
         "accuracy": sum(r["correct"] for r in rows) / n,
         "latency_mean_s": statistics.mean(latencies),
-        "latency_p95_s": sorted(latencies)[max(0, int(0.95 * n) - 1)],
+        "latency_p95_s": sorted(latencies)[max(0, int(0.95 * m) - 1)],
         "latency_max_s": max(latencies),
         "hallucination_rate": sum(r["hallucinated"] for r in rows) / n,
         "tool_calling_accuracy": sum(r["tools_ok"] for r in rows) / n,
@@ -142,7 +145,7 @@ def write_results(rows: list[dict], summary: dict, label: str) -> None:
     md = f"""# Kwantitatieve evaluatieresultaten — LTS PoC
 
 Gegenereerd: {datetime.now().isoformat(timespec='seconds')} · Configuratie: {label}
-Testcases: {s['n_cases']} (3 scenario's + healthy-controlegroep, met PII-canaries)
+Testcases: {s['n_cases']}{f" · waarvan {s['n_errors']} met runtime-fout" if s.get('n_errors') else ''} (3 scenario's + healthy-controlegroep, met PII-canaries)
 
 | Metric | Doel | Resultaat | Status |
 |---|---|---|---|
