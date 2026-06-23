@@ -20,8 +20,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
+
+# Load .env before reading OLLAMA_URL/OLLAMA_MODEL below. This script does not
+# import `agent`, so it needs its own load_dotenv call.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 BASE = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
