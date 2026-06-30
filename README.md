@@ -98,6 +98,28 @@ LTS_MACHINE_STATE=data/_ui_state.json python -m mcp_server.server
 # of interactief: npx @modelcontextprotocol/inspector python -m mcp_server.server
 ```
 
+### 3.1 Gebruikersportaal (naast de servicedesk)
+
+Er is ook een **eindgebruiker / klant portaal** (`ui/user_app.py`) dat naast
+de service app draait en ermee interageert:
+
+```bash
+# Terminal 1 — Servicedesk / technicus (HitL)
+streamlit run ui/app.py --server.port 8501
+
+# Terminal 2 — Eindgebruiker portaal
+streamlit run ui/user_app.py --server.port 8502
+```
+
+**Interactie flow (demo):**
+1. Eindgebruiker meldt een probleem in het gebruikersportaal (categorie + naam + klant).
+2. Het incident verschijnt direct als **[LIVE]** entry in de technicus-app.
+3. Technicus selecteert het live incident, draait diagnose, keurt expliciet goed.
+4. Gebruiker ziet in zijn portaal de status updaten (ingediend → wacht op goedkeuring → ticketnummer).
+5. Het ticket is zichtbaar in beide apps (via gedeelde `pending_drafts.json` + `mock_autotask.json`).
+
+Dit demonstreert de volledige keten van melding → agent diagnose → HitL → ticket zonder dat echte data het netwerk verlaat.
+
 ## 4. Evaluatie
 
 **Kwantitatief** (meet de vijf metrics uit het eindverslag — accuracy ≥80%,
@@ -163,7 +185,9 @@ agent/
   backends.py          McpBackend (stdio) en DirectBackend (evaluatie/tests)
   prompts.py           Rolprompt, JSON-schema, anti-hallucinatie-instructies
 autotask/client.py     Sandbox-client (backoff, least privilege) + mock + HitL-drafts
-ui/app.py              Streamlit HitL-interface + auditlog
+ui/app.py              Streamlit HitL / servicedesk interface (technicus)
+ui/user_app.py         Streamlit gebruikersportaal (eindgebruiker) — draait ernaast
+ui/shared.py           Gedeelde helpers voor live incidenten + status (interactie)
 simulator/log_generator.py  Testomgeving: machine states + logs + PII-canaries
 evaluation/            Kwantitatieve en kwalitatieve evaluatie + dataset
 tests/test_poc.py      Unit-/integratietests

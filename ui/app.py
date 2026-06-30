@@ -28,9 +28,11 @@ from agent.llm_client import GeminiClient, MockLLM, OllamaClient  # noqa: E402
 from agent.prompts import TICKET_TEMPLATE  # noqa: E402
 from autotask.client import get_autotask_client  # noqa: E402
 from mcp_server.filters.pii_filter import detect_leaks  # noqa: E402
+from mcp_server import toolkit as remediation_toolkit  # noqa: E402
+
+from ui.shared import get_all_incidents, load_live_incidents  # noqa: E402
 
 AUDIT_LOG = ROOT / "data" / "hitl_audit.jsonl"
-DATASET = ROOT / "evaluation" / "dataset" / "testcases.json"
 
 st.set_page_config(page_title="LTS — Lokale Troubleshooter", page_icon="",
                    layout="wide")
@@ -40,12 +42,9 @@ st.set_page_config(page_title="LTS — Lokale Troubleshooter", page_icon="",
 # Helpers
 # ---------------------------------------------------------------------------
 
-@st.cache_data
 def load_cases() -> list[dict]:
-    if not DATASET.exists():
-        from simulator.log_generator import generate_dataset
-        generate_dataset(out_path=DATASET)
-    return json.loads(DATASET.read_text(encoding="utf-8"))
+    # Combined: live user-reported incidents first (interact with user_app.py), then test dataset
+    return get_all_incidents(include_test=True)
 
 
 def audit(event: str, payload: dict) -> None:
@@ -74,10 +73,19 @@ def build_agent(use_mcp: bool, llm_choice: str, state: dict) -> TroubleshooterAg
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("LTS — Configuratie")
+
+live = load_live_incidents()
+st.sidebar.caption(f"Live incidenten (van gebruikersportaal): **{len(live)}**")
+if st.sidebar.button("Vernieuw incidenten", use_container_width=True):
+    st.rerun()
+
 cases = load_cases()
-labels = [f"{c['state']['case_id']} · {c['state']['hostname']} · "
-          f"{c['state']['customer']}" for c in cases]
-idx = st.sidebar.selectbox("Inkomend incident (testomgeving)",
+labels = []
+for c in cases:
+    src = "LIVE" if c.get("state", {}).get("source") == "user_portal" else "TEST"
+    labels.append(f"[{src}] {c['state']['case_id']} · {c['state']['hostname']} · {c['state']['customer']}")
+
+idx = st.sidebar.selectbox("Inkomend incident",
                            range(len(cases)), format_func=lambda i: labels[i])
 case = cases[idx]
 state = case["state"]
@@ -105,7 +113,7 @@ if at_client.mode == "mock":
 
 st.title("De lokale troubleshooter")
 st.caption("Veilige geautomatiseerde ondersteuning voor Managed Services — "
-           "Proof of Concept · Ultimum MSP")
+           "Service / Technicus UI  ·  (draai naast ui/user_app.py) · Ultimum MSP")
 
 tab_diag, tab_drafts, tab_audit = st.tabs(
     ["Diagnose & goedkeuring", "Openstaande concepten", "Auditlog"])
@@ -168,15 +176,14 @@ with tab_diag:
 
         st.divider()
         st.subheader("Human-in-the-Loop beslissing")
-        st.info("De agent voert **niets** uit. Pas na jouw goedkeuring wordt het "
-                "ticket in Autotask aangemaakt (functionele eis 3: 100% expliciete "
-                "menselijke goedkeuring).")
+        st.info("De agent voert **niets** uit. Pas na jouw expliciete goedkeuring wordt "
+                "het ticket aangemaakt **én** de voorgestelde actie uitgevoerd op de host machine.")
         approver = st.text_input("Naam technicus", value="", placeholder="bijv. S. Bakker")
         feedback = st.text_area("Opmerking (optioneel, gebruikt voor kwalitatieve "
                                 "evaluatie)", "")
         c_ok, c_no = st.columns(2)
         with c_ok:
-            if st.button("Goedkeuren → ticket aanmaken", type="primary",
+            if st.button("Goedkeuren → ticket + uitvoeren op host", type="primary",
                          use_container_width=True, disabled=not approver):
                 evidence_lines = "\n".join(f"  - {e['tool']}: {e['finding']}"
                                            for e in d["evidence"])
@@ -187,22 +194,73 @@ with tab_diag:
                     action_details=d["action_details"], confidence=d["confidence"],
                     evidence_lines=evidence_lines, latency=result["latency_s"],
                     model=result["model"])
+
+                # 1. Create the ticket (success path)
                 ticket = at_client.create_ticket(
                     title=f"[LTS] {d['scenario']} op {state['hostname']} "
                           f"({state['customer']})",
                     description=body,
                     priority="High" if d["scenario"] != "healthy" else "Low")
+
+                # 2. EXECUTE the proposed remediation on the host machine (simulated state)
+                exec_result = None
+                try:
+                    remediation_toolkit.CTX.load_state(state)
+                    exec_result = remediation_toolkit.execute_remediation(
+                        d["proposed_action"],
+                        target=d.get("action_details", ""),
+                        reason=d.get("root_cause", "")
+                    )
+                except Exception as ex:  # noqa: BLE001
+                    exec_result = json.dumps({"error": str(ex)}, ensure_ascii=False)
+
                 audit("approved", {"case": state["case_id"], "approver": approver,
                                    "ticket": ticket.get("ticketNumber"),
-                                   "feedback": feedback})
+                                   "feedback": feedback,
+                                   "executed": d["proposed_action"]})
+
                 st.success(f"Ticket **{ticket.get('ticketNumber')}** aangemaakt in "
                            f"Autotask ({at_client.mode}).")
+                st.success("Remediation uitgevoerd op de host machine (simulatie).")
+                with st.expander("Uitvoeringsresultaat (host state na actie)"):
+                    st.code(exec_result or "{}", language="json")
+
         with c_no:
-            if st.button("Afwijzen (geen wijziging)", use_container_width=True,
+            if st.button("Afwijzen", use_container_width=True,
                          disabled=not approver):
+                evidence_lines = "\n".join(f"  - {e['tool']}: {e['finding']}"
+                                           for e in d["evidence"])
+                body = TICKET_TEMPLATE.format(
+                    hostname=state["hostname"], customer=state["customer"],
+                    user=state["user"], scenario=d["scenario"],
+                    root_cause=d["root_cause"], proposed_action=d["proposed_action"],
+                    action_details=d["action_details"], confidence=d["confidence"],
+                    evidence_lines=evidence_lines, latency=result["latency_s"],
+                    model=result["model"])
+
+                # Afwijzen: create a ticket anyway, but leave it for manual pickup ("new")
+                # Do NOT execute any remediation.
+                manual_title = f"[MANUAL] {d['scenario']} op {state['hostname']} ({state['customer']})"
+                manual_body = (
+                    "LTS diagnose werd AFGEWEZEN door de technicus.\n"
+                    "Geen automatische actie uitgevoerd op de host.\n\n"
+                    "--- LTS diagnose (ter info) ---\n" + body +
+                    "\n\nTechnicus feedback: " + (feedback or "(geen opmerking)") +
+                    "\n\nDeze ticket is aangemaakt zodat een technicus het handmatig kan oppakken."
+                )
+                ticket = at_client.create_ticket(
+                    title=manual_title,
+                    description=manual_body,
+                    priority="Medium")
+
                 audit("rejected", {"case": state["case_id"], "approver": approver,
-                                   "feedback": feedback})
-                st.warning("Diagnose afgewezen en gelogd. Er is niets gewijzigd.")
+                                   "ticket": ticket.get("ticketNumber"),
+                                   "feedback": feedback,
+                                   "note": "ticket_created_for_manual_handling"})
+
+                st.info(f"Ticket **{ticket.get('ticketNumber')}** aangemaakt (status: new/open) "
+                        "voor handmatige afhandeling. Geen actie uitgevoerd op de host.")
+                st.warning("Diagnose afgewezen — ticket overgedragen aan menselijke technicus.")
 
 # ====================== TAB 2: Draft tickets ======================
 with tab_drafts:
@@ -218,10 +276,13 @@ with tab_drafts:
             a, b = st.columns(2)
             if a.button("Goedkeuren", key=f"a{dft['draft_id']}"):
                 res = at_client.resolve_draft(dft["draft_id"], True, "UI")
-                st.success(f"Aangemaakt: {res['ticket']['ticketNumber']}")
+                tnum = (res.get("ticket") or {}).get("ticketNumber") if isinstance(res.get("ticket"), dict) else res.get("ticket")
+                st.success(f"Ticket aangemaakt + (indien van toepassing) actie uitgevoerd: {tnum}")
                 st.rerun()
             if b.button("Afwijzen", key=f"r{dft['draft_id']}"):
-                at_client.resolve_draft(dft["draft_id"], False, "UI")
+                res = at_client.resolve_draft(dft["draft_id"], False, "UI")
+                tnum = (res.get("ticket") or {}).get("ticketNumber") if isinstance(res.get("ticket"), dict) else res.get("ticket")
+                st.info(f"Ticket voor handmatige opvolging aangemaakt: {tnum} (geen auto-actie)")
                 st.rerun()
 
 # ====================== TAB 3: Audit log ======================

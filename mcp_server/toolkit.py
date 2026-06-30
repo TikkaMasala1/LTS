@@ -22,6 +22,7 @@ import os
 import platform
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 
 from mcp_server.filters.pii_filter import PIIFilter
@@ -233,6 +234,95 @@ def propose_remediation(action: str, target: str, reason: str) -> str:
                 "reason": _filtered(reason), "status": "PENDING_HUMAN_APPROVAL",
                 "executed": False}
     return _j(proposal)
+
+
+def _now_ts() -> str:
+    """Timestamp for simulated action logs."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def execute_remediation(action: str, target: str = "", reason: str = "") -> str:
+    """Execute a remediation action on the (simulated) host machine.
+
+    This is only intended to be called *after* explicit Human-in-the-Loop approval.
+    Mutates the current machine state (CTX) to reflect the fix.
+    In live mode it is a no-op (or very limited).
+    """
+    action = (action or "no_action").strip().lower()
+    mode = CTX.mode
+    result: dict = {"action": action, "executed": True, "mode": mode, "target": target}
+
+    if mode == "live":
+        # Live mode: do not actually modify the real host in this PoC
+        result.update({
+            "note": "Live mode: execution simulated only. In a real deployment this would run the remediation (e.g. disk cleanup, process restart via approved privileged action).",
+            "executed": False,  # mark as not really done on real host for safety in demo
+        })
+        return _j(result)
+
+    # --- Simulated execution: mutate CTX.state ---
+    s = CTX.state
+    logs = s.setdefault("logs", [])
+
+    if action == "cleanup_disk":
+        disk = s.setdefault("disk", {}).setdefault("C:", {"total_gb": 512})
+        total = float(disk.get("total_gb", 512))
+        new_used = round(total * 0.58, 1)
+        disk["used_gb"] = new_used
+        disk["free_gb"] = round(total - new_used, 1)
+        disk["used_pct"] = round(100 * new_used / total, 1)
+        s["temp_size_gb"] = round(float(s.get("temp_size_gb", 5)) * 0.25, 1)
+        if "large_files" in s:
+            s["large_files"] = s["large_files"][:1]
+        result["details"] = f"Disk cleaned. New usage: {disk['used_pct']}% free space recovered."
+        logs.append(f"{_now_ts()} INFO  LTS-Remediation  cleanup_disk executed (approved). {result['details']}")
+
+    elif action in ("restart_process", "restart_service"):
+        perf = s.setdefault("performance", {"cpu_pct": 30, "ram_pct": 50, "top_processes": []})
+        perf["cpu_pct"] = 18
+        perf["ram_pct"] = 42
+        target_name = target or s.get("culprit_process") or ""
+        if perf.get("top_processes"):
+            for p in perf["top_processes"]:
+                if not target_name or target_name.lower() in p.get("name", "").lower():
+                    p["cpu_pct"] = 2
+                    p["ram_mb"] = min(int(p.get("ram_mb", 800)), 550)
+        if "culprit_process" in s:
+            # keep for audit but mark resolved
+            s["culprit_process_resolved"] = s.pop("culprit_process")
+        result["details"] = f"Process/service pressure relieved. CPU/RAM normalized. Target={target_name or 'primary'}"
+        logs.append(f"{_now_ts()} INFO  LTS-Remediation  {action} executed (approved). {result['details']}")
+
+    elif action in ("reconnect_vpn", "update_vpn_client", "fix_vpn"):
+        vpn = s.setdefault("vpn", {})
+        vpn["latency_ms"] = 24
+        vpn["packet_loss_pct"] = 0.0
+        vpn["throughput_mbps"] = 155
+        vpn["client_version"] = "5.3.1"
+        vpn["split_tunnel"] = True
+        net = s.setdefault("network", {})
+        net["ping_gateway_ms"] = 18
+        result["details"] = "VPN connection metrics restored to healthy levels."
+        logs.append(f"{_now_ts()} INFO  LTS-Remediation  {action} executed (approved). {result['details']}")
+
+    elif action == "flush_dns":
+        net = s.setdefault("network", {})
+        net["dns_ok"] = True
+        result["details"] = "DNS flushed (simulated)."
+        logs.append(f"{_now_ts()} INFO  LTS-Remediation  flush_dns executed (approved).")
+
+    else:
+        # no_action or unknown
+        result["executed"] = False
+        result["details"] = "No automatic remediation action performed (no_action or unknown)."
+        logs.append(f"{_now_ts()} INFO  LTS-Remediation  No remediation for action='{action}'.")
+
+    result["new_state_summary"] = {
+        "disk_used_pct": s.get("disk", {}).get("C:", {}).get("used_pct"),
+        "cpu_pct": s.get("performance", {}).get("cpu_pct"),
+        "vpn_latency": s.get("vpn", {}).get("latency_ms"),
+    }
+    return _j(result)
 
 
 TOOL_REGISTRY = {

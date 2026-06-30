@@ -51,6 +51,8 @@ class DirectBackend:
         self._fns["autotask_search_tickets"] = self._at_search
         self._fns["autotask_get_ticket"] = self._at_get
         self._fns["autotask_draft_ticket"] = self._at_draft
+        # execute_remediation is available after HitL approval only (not listed to LLM)
+        self._fns["execute_remediation"] = self._execute_remediation
 
     def _at_search(self, status: str = "open", max_results: int = 10) -> str:
         """Search tickets in Autotask (sandbox)."""
@@ -65,6 +67,11 @@ class DirectBackend:
         """Create a draft ticket (requires HitL approval)."""
         return self._at.draft_ticket_json(title=title, description=description,
                                           priority=priority, queue=queue)
+
+    def _execute_remediation(self, action: str, target: str = "", reason: str = "") -> str:
+        """Execute remediation (only after explicit technician approval)."""
+        from mcp_server import toolkit as _tk
+        return _tk.execute_remediation(action, target=target, reason=reason)
 
     def load_state(self, state: dict) -> None:
         toolkit.CTX.load_state(state)

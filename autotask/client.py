@@ -74,7 +74,10 @@ class BaseAutotaskClient:
 
     def resolve_draft(self, draft_id: str, approved: bool, approver: str,
                       feedback: str = "") -> dict:
-        """Approve => ticket is actually created; reject => only logged."""
+        """Approve: create normal ticket + (in UI) execute remediation.
+        Reject (Afwijzen): still create a ticket, but marked for manual pickup by technician
+        (status effectively 'new' / open, no automated remediation executed).
+        """
         drafts = _load(DRAFTS_DB, [])
         for d in drafts:
             if d["draft_id"] == draft_id:
@@ -87,7 +90,23 @@ class BaseAutotaskClient:
                     d["status"] = "APPROVED"
                     d["ticket"] = ticket
                 else:
+                    # Create ticket anyway, but signal manual handling required.
+                    # Title and description make it clear a technician must pick this up.
+                    manual_title = f"[MANUAL] {d['title']}"
+                    manual_desc = (
+                        "LTS-agent diagnose was REJECTED by technician.\n"
+                        "No automated remediation was executed.\n\n"
+                        "--- Original draft description ---\n"
+                        + d["description"] +
+                        "\n\nTechnician feedback: " + (feedback or "(none)") +
+                        "\n\nPlease investigate manually and resolve the incident."
+                    )
+                    ticket = self.create_ticket(
+                        manual_title, manual_desc,
+                        d.get("priority", "Medium"), d.get("queue", "Managed Services")
+                    )
                     d["status"] = "REJECTED"
+                    d["ticket"] = ticket
                 _save(DRAFTS_DB, drafts)
                 return d
         raise AutotaskError(f"Draft {draft_id} niet gevonden")
